@@ -1,0 +1,22 @@
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Machine Learning and AI models
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+sentence-transformers>=2.2.0
+
+# Web Framework
+Flask>=2.3.0
+
+# Database (built-in with Python)
+# sqlite3
+
+# Additional utilities (built-in with Python)
+# argparse
+# datetime
+# pathlib

@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+
+from flask import Flask, render_template, jsonify, request, Response
+import os
+import sqlite3
+import json
+from database import DetectionDatabase
+from ai_agent import SemanticSearchAgent
+import cv2
+import argparse
+
+app = Flask(__name__)
+
+class DetectionViewer:
+    def __init__(self, db_path: str = "detections.db"):
+        self.db = DetectionDatabase(db_path)
+        self.search_agent = SemanticSearchAgent(db_path)
+    
+    def get_detections_by_date(self, date_filter=None, object_type_filter=None, 
+                              limit=100, offset=0):
+        """Get detections with optional filtering."""
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        
+        # Use explicit column names for better maintainability
+        query = """SELECT id, object_type, time, crop_of_object, original_video_link, 
+                          frame_num_original_video, caption, embeddings, confidence, 
+                          bbox_x, bbox_y, bbox_width, bbox_height, created_at 
+                   FROM detections WHERE 1=1"""
+        params = []
+        
+        if date_filter:
+            query += " AND DATE(time) = ?"
+            params.append(date_filter)
+        
+        if object_type_filter:
+            query += " AND object_type = ?"
+            params.append(object_type_filter)
+        
+        query += " ORDER BY time DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        conn.close()
+        
+        return results
+    
+    def get_detection_stats(self):
+        """Get statistics about detections."""
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        
+        # Get total counts by object type
+        cursor.execute('''
+            SELECT object_type, COUNT(*) as count 
+            FROM detections 
+            GROUP BY object_type 
+            ORDER BY count DESC
+        ''')
+        object_counts = cursor.fetchall()
+        
+        # Get detections by date
+        cursor.execute('''
+            SELECT DATE(time) as date, COUNT(*) as count 
+            FROM detections 
+            GROUP BY DATE(time) 
+            ORDER BY date DESC 
+            LIMIT 30
+        ''')
+        date_counts = cursor.fetchall()
+        
+        # Get total count
+        cursor.execute('SELECT COUNT(*) FROM detections')
+        total_count = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            'object_counts': object_counts,
+            'date_counts': date_counts,
+            'total_count': total_count
+        }
+    
+    def get_tracks_by_date(self, date_filter=None, object_type_filter=None, 
+                          limit=100, offset=0):
+        """Get tracks with optional filtering."""
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        
+        # Build query with filters
+        query = "SELECT * FROM tracks WHERE 1=1"
+        params = []
+        
+        if date_filter:
+            query += " AND DATE(start_time) = ?"
+            params.append(date_filter)
+        
+        if object_type_filter:
+            query += " AND object_type = ?"
+            params.append(object_type_filter)
+        
+        query += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        conn.close()
+        
+        return results
+    
+    def get_track_stats(self):
+        """Get statistics about tracks."""
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        
+        # Get total counts by object type
+        cursor.execute('''
+            SELECT object_type, COUNT(*) as count 
+            FROM tracks 
+            GROUP BY object_type 
+            ORDER BY count DESC
+        ''')
+        track_counts = cursor.fetchall()
+        
+        # Get tracks by date
+        cursor.execute('''
+            SELECT DATE(start_time) as date, COUNT(*) as count 
+            FROM tracks 
+            GROUP BY DATE(start_time) 
+            ORDER BY date DESC 
+            LIMIT 30
+        ''')
+        track_date_counts = cursor.fetchall()
+        
+        # Get total count
+        cursor.execute('SELECT COUNT(*) FROM tracks')
+        total_tracks = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            'track_counts': track_counts,
+            'track_date_counts': track_date_counts,
+            'total_tracks': total_tracks
+        }
+    
+
+# Initialize viewer
+viewer = DetectionViewer()
+
+@app.route('/')
+def index():
+    """Main detection viewer page."""
+    return render_template('index.html')
+
+@app.route('/api/detections')
+def api_detections():
+    """API endpoint to get detections with filtering."""
+    date_filter = request.args.get('date')
+    object_type = request.args.get('type')
+    limit = int(request.args.get('limit', 50))
+    offset = int(request.args.get('offset', 0))
+    
+    detections = viewer.get_detections_by_date(
+        date_filter=date_filter,
+        object_type_filter=object_type,
+        limit=limit,
+        offset=offset
+    )
+    
+    # Convert to JSON-serializable format
+    detection_list = []
+    for det in detections:
+        detection_data = {
+            'id': det[0],
+            'object_type': det[1],
+            'time': det[2],
+            'original_video_link': det[4],
+            'frame_num': det[5],
+            'caption': det[6],
+            'confidence': det[8],
+            'bbox_x': det[9],
+            'bbox_y': det[10],
+            'bbox_width': det[11],
+            'bbox_height': det[12],
+            'created_at': det[13]
+        }
+        detection_list.append(detection_data)
+    
+    return jsonify(detection_list)
+
+@app.route('/api/stats')
+def api_stats():
+    """API endpoint to get detection statistics."""
+    stats = viewer.get_detection_stats()
+    track_stats = viewer.get_track_stats()
+    # Combine both stats
+    stats.update(track_stats)
+    return jsonify(stats)
+
+@app.route('/api/tracks')
+def api_tracks():
+    """API endpoint to get tracks with filtering."""
+    date_filter = request.args.get('date')
+    object_type = request.args.get('type')
+    limit = int(request.args.get('limit', 50))
+    offset = int(request.args.get('offset', 0))
+    
+    tracks = viewer.get_tracks_by_date(
+        date_filter=date_filter,
+        object_type_filter=object_type,
+        limit=limit,
+        offset=offset
+    )
+    
+    # Convert to JSON-serializable format
+    track_list = []
+    for track in tracks:
+        track_data = {
+            'id': track[0],
+            'object_type': track[1],
+            'original_video_link': track[2],
+            'start_frame': track[3],
+            'end_frame': track[4],
+            'start_time': track[5],
+            'end_time': track[6],
+            'track_data': json.loads(track[7]),  # Parse JSON string
+            'best_crop_detection_id': track[8],
+            'avg_confidence': track[9],
+            'detection_count': track[10],
+            'created_at': track[11]
+        }
+        track_list.append(track_data)
+    
+    return jsonify(track_list)
+
+@app.route('/api/track/<int:track_id>')
+def api_track_detail(track_id):
+    """API endpoint to get detailed track information."""
+    track = viewer.db.get_track_by_id(track_id)
+    if not track:
+        return jsonify({'error': 'Track not found'}), 404
+    
+    track_data = {
+        'id': track[0],
+        'object_type': track[1],
+        'original_video_link': track[2],
+        'start_frame': track[3],
+        'end_frame': track[4],
+        'start_time': track[5],
+        'end_time': track[6],
+        'track_data': json.loads(track[7]),  # Parse JSON string
+        'best_crop_detection_id': track[8],
+        'avg_confidence': track[9],
+        'detection_count': track[10],
+        'created_at': track[11]
+    }
+    
+    return jsonify(track_data)
+
+@app.route('/api/track/<int:track_id>/image')
+def api_track_image(track_id):
+    """Get track's best crop image."""
+    track = viewer.db.get_track_by_id(track_id)
+    if not track:
+        return "Track not found", 404
+    
+    best_detection_id = track[8]  # best_crop_detection_id
+    if not best_detection_id:
+        return "No detection found for track", 404
+    
+    detection = viewer.db.get_detection_by_id(best_detection_id)
+    if not detection:
+        return "Detection not found", 404
+    
+    crop_bytes = detection[3]  # crop_of_object
+    return Response(crop_bytes, mimetype='image/jpeg')
+
+@app.route('/api/detection/<int:detection_id>/image')
+def api_detection_image(detection_id):
+    """Get detection crop image."""
+    detection = viewer.db.get_detection_by_id(detection_id)
+    if not detection:
+        return "Detection not found", 404
+    
+    crop_bytes = detection[3]  # crop_of_object
+    return Response(crop_bytes, mimetype='image/jpeg')
+
+@app.route('/api/detection/<int:detection_id>/fullframe')
+def api_detection_fullframe(detection_id):
+    """Get detection full frame image."""
+    detection = viewer.db.get_detection_by_id(detection_id)
+    if not detection:
+        return "Detection not found", 404
+    
+    # Note: full_frame is no longer stored in the database
+    # This endpoint is kept for compatibility but returns an error
+    return jsonify({'error': 'Full frame images are no longer stored. Use video endpoint instead.'}), 404
+
+@app.route('/api/detection/<int:detection_id>/video')
+def api_detection_video(detection_id):
+    """Get video segment around detection."""
+    detection = viewer.db.get_detection_by_id(detection_id)
+    if not detection:
+        return jsonify({'error': 'Detection not found'}), 404
+    
+    video_path = detection[4]  # original_video_link
+    frame_num = detection[5]   # frame_num_original_video
+    
+    if not os.path.exists(video_path):
+        return jsonify({'error': 'Video file not found'}), 404
+    
+    # Get video info
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    cap.release()
+    
+    # Calculate time offsets
+    detection_time = frame_num / fps if fps > 0 else 0
+    start_time = max(0, detection_time - 5)
+    end_time = min(total_frames / fps if fps > 0 else 0, detection_time + 5)
+    
+    return jsonify({
+        'video_path': os.path.basename(video_path),
+        'detection_time': detection_time,
+        'start_time': start_time,
+        'end_time': end_time,
+        'fps': fps,
+        'total_frames': total_frames,
+        'stream_url': f'/api/detection/{detection_id}/video_stream'
+    })
+
+@app.route('/api/detection/<int:detection_id>/video_stream')
+def api_detection_video_stream(detection_id):
+    """Stream video segment around detection."""
+    detection = viewer.db.get_detection_by_id(detection_id)
+    if not detection:
+        return "Detection not found", 404
+    
+    video_path = detection[4]  # original_video_link
+    # frame_num = detection[5]   # frame_num_original_video (for future use)
+    
+    if not os.path.exists(video_path):
+        return "Video file not found", 404
+    
+    # Get range header for partial content support
+    range_header = request.headers.get('Range')
+    
+    # For video streaming, return the actual video file with range support
+    # This is a simplified approach - for production, consider using dedicated streaming
+    try:
+        def generate():
+            with open(video_path, 'rb') as f:
+                data = f.read(1024)
+                while data:
+                    yield data
+                    data = f.read(1024)
+        
+        file_size = os.path.getsize(video_path)
+        
+        if range_header:
+            # Handle partial content requests
+            ranges = range_header.replace('bytes=', '').split('-')
+            start = int(ranges[0]) if ranges[0] else 0
+            end = int(ranges[1]) if ranges[1] else file_size - 1
+            
+            def generate_range():
+                with open(video_path, 'rb') as f:
+                    f.seek(start)
+                    remaining = end - start + 1
+                    while remaining:
+                        chunk_size = min(1024, remaining)
+                        data = f.read(chunk_size)
+                        if not data:
+                            break
+                        yield data
+                        remaining -= len(data)
+            
+            return Response(
+                generate_range(),
+                206,  # Partial Content
+                {
+                    'Content-Range': f'bytes {start}-{end}/{file_size}',
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': str(end - start + 1),
+                    'Content-Type': 'video/mp4',
+                }
+            )
+        else:
+            return Response(
+                generate(),
+                200,
+                {
+                    'Content-Type': 'video/mp4',
+                    'Content-Length': str(file_size),
+                    'Accept-Ranges': 'bytes',
+                }
+            )
+            
+    except Exception as e:
+        return f"Error streaming video: {str(e)}", 500
+
+@app.route('/api/object_types')
+def api_object_types():
+    """Get list of all object types in database."""
+    import sqlite3
+    conn = sqlite3.connect(viewer.db.db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT DISTINCT object_type FROM tracks ORDER BY object_type')
+    types = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    return jsonify(types)
+
+@app.route('/api/search', methods=['POST'])
+def api_search():
+    """API endpoint for semantic search of detections."""
+    data = request.get_json()
+    query = data.get('query', '').strip()
+    
+    if not query:
+        return jsonify({'error': 'Query parameter is required'}), 400
+    
+    top_k = data.get('top_k', 20)
+    threshold = data.get('threshold', 0.3)
+    
+    try:
+        results = viewer.search_agent.search(query, top_k=top_k, similarity_threshold=threshold)
+        
+        # Convert results to JSON-serializable format
+        search_results = []
+        for detection_dict, similarity in results:
+            # Create a JSON-safe detection dict (exclude binary data)
+            safe_detection = {
+                'id': detection_dict['id'],
+                'object_type': detection_dict['object_type'],
+                'time': detection_dict['time'],
+                'original_video_link': detection_dict['original_video_link'],
+                'frame_num_original_video': detection_dict['frame_num_original_video'],
+                'caption': detection_dict['caption'],
+                'confidence': detection_dict['confidence'],
+                'bbox_x': detection_dict['bbox_x'],
+                'bbox_y': detection_dict['bbox_y'],
+                'bbox_width': detection_dict['bbox_width'],
+                'bbox_height': detection_dict['bbox_height'],
+                'created_at': detection_dict['created_at']
+            }
+            
+            result = {
+                'detection': safe_detection,
+                'similarity': similarity
+            }
+            search_results.append(result)
+        
+        return jsonify({
+            'query': query,
+            'results': search_results,
+            'total_found': len(search_results)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Search failed: {str(e)}'}), 500
+
+@app.route('/api/index_captions', methods=['POST'])
+def api_index_captions():
+    """API endpoint to index all captions for semantic search."""
+    data = request.get_json() or {}
+    force_reindex = data.get('force_reindex', False)
+    
+    try:
+        count = viewer.search_agent.index_captions(force_reindex=force_reindex)
+        return jsonify({
+            'message': f'Successfully indexed {count} captions',
+            'indexed_count': count
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Indexing failed: {str(e)}'}), 500
+
+@app.route('/api/search/suggestions')
+def api_search_suggestions():
+    """API endpoint to get search query suggestions."""
+    object_type = request.args.get('type')
+    suggestions = viewer.search_agent.suggest_queries(object_type=object_type)
+    
+    return jsonify({'suggestions': suggestions})
+
+def main():
+    parser = argparse.ArgumentParser(description='Web viewer for detections')
+    parser.add_argument('--db', default='detections.db',
+                       help='Database path (default: detections.db)')
+    parser.add_argument('--host', default='localhost',
+                       help='Host to bind to (default: localhost)')
+    parser.add_argument('--port', type=int, default=3000,
+                       help='Port to bind to (default: 3000)')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug mode')
+    
+    args = parser.parse_args()
+    
+    # Initialize viewer with custom database
+    global viewer
+    viewer = DetectionViewer(args.db)
+    
+    print(f"Starting detection viewer on http://{args.host}:{args.port}")
+    print(f"Using database: {args.db}")
+    
+    app.run(host=args.host, port=args.port, debug=args.debug)
+
+if __name__ == "__main__":
+    main()
