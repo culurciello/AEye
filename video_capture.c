@@ -73,7 +73,7 @@ static shared_frame_header_t *shared_header = NULL;
 static unsigned char *shared_frame_data = NULL;
 static int shm_fd = -1;
 static FILE *current_video_pipe = NULL;
-static char current_video_path[512];
+static char current_video_path[1024];
 static time_t current_minute = 0;
 static int frame_count_in_minute = 0;
 
@@ -160,7 +160,7 @@ static void open_new_video_file(void) {
     struct tm *tm_info;
     char dir_path[512];
     char minute_str[8];
-    char ffmpeg_cmd[1024];
+    char ffmpeg_cmd[2048];
     
     time(&now);
     tm_info = localtime(&now);
@@ -173,12 +173,10 @@ static void open_new_video_file(void) {
     snprintf(current_video_path, sizeof(current_video_path), 
              "%s/%s.mp4", dir_path, minute_str);
     
-    // Build ffmpeg command for H.264 encoding - optimized for macOS
+    // Build ffmpeg command for H.264 encoding - using rawvideo input from stdin
     snprintf(ffmpeg_cmd, sizeof(ffmpeg_cmd),
-        "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -r 30 -i - "
-        "-c:v libx264 -crf 22 -preset medium "
-        "-pix_fmt yuv420p "
-        "-movflags +faststart \"%s\"",
+        "ffmpeg -f rawvideo -framerate 30 -pix_fmt yuyv422 -s %dx%d -i - "
+        "-c:v libx264 -preset veryfast -crf 23 \"%s\"",
         FRAME_WIDTH, FRAME_HEIGHT, current_video_path);
     
     current_video_pipe = popen(ffmpeg_cmd, "w");
@@ -261,9 +259,43 @@ static int xioctl(int fh, int request, void *arg) {
     return r;
 }
 
+static int try_open_device(const char *dev_name) {
+    int test_fd = open(dev_name, O_RDWR | O_NONBLOCK, 0);
+    if (test_fd != -1) {
+        close(test_fd);
+        return 0;
+    }
+    return -1;
+}
+
+static const char* find_available_device(void) {
+    static const char* devices[] = {
+        "/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3", NULL
+    };
+    
+    for (int i = 0; devices[i] != NULL; i++) {
+        if (try_open_device(devices[i]) == 0) {
+            printf("Found available device: %s\n", devices[i]);
+            return devices[i];
+        }
+    }
+    
+    fprintf(stderr, "No available video devices found\n");
+    return NULL;
+}
+
 static int init_device(const char *dev_name) {
     struct v4l2_capability cap;
     struct v4l2_format fmt;
+
+    // Try the specified device first, then find alternatives
+    if (try_open_device(dev_name) != 0) {
+        printf("Device %s not available, searching for alternatives...\n", dev_name);
+        dev_name = find_available_device();
+        if (!dev_name) {
+            return -1;
+        }
+    }
 
     fd = open(dev_name, O_RDWR | O_NONBLOCK, 0);
     if (-1 == fd) {
@@ -296,7 +328,7 @@ static int init_device(const char *dev_name) {
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = FRAME_WIDTH;
     fmt.fmt.pix.height = FRAME_HEIGHT;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
     fmt.fmt.pix.field = V4L2_FIELD_INTERLACED;
 
     if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt)) {

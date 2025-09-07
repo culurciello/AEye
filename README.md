@@ -81,11 +81,6 @@ make clean && make
 make check-deps
 ```
 
-**Development Installation:**
-```bash
-# Install additional development tools
-pip install -r requirements-dev.txt
-```
 
 ### 3. Basic Usage
 
@@ -822,3 +817,27 @@ uptime
 free -h  # Linux
 vm_stat  # macOS
 ```
+
+
+#### Linux camera test
+
+Video test that works:
+
+```
+ffmpeg -f v4l2 -framerate 30 -video_size 1280x720 -i /dev/video0 -t 10 -c:v libx264 -preset veryfast -crf 23 test.mp4
+```
+
+```
+ffmpeg -f v4l2 -video_size 1280x720 -i /dev/video0 -frames:v 1 snapshot.jpg
+```
+
+
+Linux test video format:
+
+sudo apt update
+sudo apt install v4l-utils
+
+v4l2-ctl --device=/dev/video0 --list-formats-ext
+
+v4l2-ctl --device=/dev/video0 --list-formats
+

@@ -49,7 +49,7 @@ class SharedMemoryFrameReader:
         """Connect to shared memory"""
         try:
             # Open shared memory
-            self.shm_fd = os.open(f"/tmp{self.shm_name}", os.O_RDWR)
+            self.shm_fd = os.open(f"/dev/shm{self.shm_name}", os.O_RDWR)
             
             # Memory map the shared frame structure (header + frame data)
             total_size = self.header_size + self.frame_data_size
