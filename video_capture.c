@@ -26,11 +26,11 @@
 #endif
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
-#define FRAME_WIDTH 640
-#define FRAME_HEIGHT 480
+#define FRAME_WIDTH 1280
+#define FRAME_HEIGHT 720
 #define FRAME_SIZE (FRAME_WIDTH * FRAME_HEIGHT * 3) // RGB format
 #define MAX_BUFFERS 4
-#define FRAMES_PER_MINUTE 1800  // 30 FPS * 60 seconds
+#define FRAMES_PER_MINUTE 1200  // 20 FPS * 60 seconds
 
 // Shared memory structure for frame processing
 typedef struct {
@@ -38,12 +38,15 @@ typedef struct {
     int height;
     int format;
     size_t size;
-    unsigned char data[FRAME_SIZE];
     struct timeval timestamp;
     int frame_ready;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-} shared_frame_t;
+    // Frame data follows this header
+    // pthread_mutex_t and cond are handled separately for cross-process compatibility
+} shared_frame_header_t;
+
+// Total shared memory layout: header + frame_data
+#define SHARED_HEADER_SIZE sizeof(shared_frame_header_t)
+#define SHARED_TOTAL_SIZE (SHARED_HEADER_SIZE + FRAME_SIZE)
 
 #ifdef PLATFORM_LINUX
 typedef struct {
@@ -66,7 +69,8 @@ static unsigned char temp_frame[FRAME_SIZE];
 
 // Common globals
 static int running = 1;
-static shared_frame_t *shared_frame = NULL;
+static shared_frame_header_t *shared_header = NULL;
+static unsigned char *shared_frame_data = NULL;
 static int shm_fd = -1;
 static FILE *current_video_pipe = NULL;
 static char current_video_path[512];
@@ -169,10 +173,10 @@ static void open_new_video_file(void) {
     snprintf(current_video_path, sizeof(current_video_path), 
              "%s/%s.mp4", dir_path, minute_str);
     
-    // Build ffmpeg command for H.264 encoding - simplified for reliability
+    // Build ffmpeg command for H.264 encoding - optimized for macOS
     snprintf(ffmpeg_cmd, sizeof(ffmpeg_cmd),
         "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -r 30 -i - "
-        "-c:v libx264 -preset fast -crf 23 "
+        "-c:v libx264 -crf 22 -preset medium "
         "-pix_fmt yuv420p "
         "-movflags +faststart \"%s\"",
         FRAME_WIDTH, FRAME_HEIGHT, current_video_path);
@@ -196,52 +200,49 @@ static void close_current_video(void) {
 }
 
 static int init_shared_memory(void) {
+    // Clean up any existing shared memory first
+    shm_unlink("/video_capture_frame");
+    
     shm_fd = shm_open("/video_capture_frame", O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
         perror("shm_open");
         return -1;
     }
     
-    if (ftruncate(shm_fd, sizeof(shared_frame_t)) == -1) {
+    if (ftruncate(shm_fd, SHARED_TOTAL_SIZE) == -1) {
         perror("ftruncate");
+        printf("Attempting to allocate %zu bytes\n", SHARED_TOTAL_SIZE);
         return -1;
     }
     
-    shared_frame = mmap(NULL, sizeof(shared_frame_t), 
-                       PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (shared_frame == MAP_FAILED) {
+    void *shared_mem = mmap(NULL, SHARED_TOTAL_SIZE, 
+                           PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (shared_mem == MAP_FAILED) {
         perror("mmap");
         return -1;
     }
     
-    shared_frame->width = FRAME_WIDTH;
-    shared_frame->height = FRAME_HEIGHT;
-    shared_frame->format = 'RGB ';
-    shared_frame->size = FRAME_SIZE;
-    shared_frame->frame_ready = 0;
+    // Set up pointers within shared memory
+    shared_header = (shared_frame_header_t *)shared_mem;
+    shared_frame_data = (unsigned char *)((char *)shared_mem + SHARED_HEADER_SIZE);
     
-    pthread_mutexattr_t mutex_attr;
-    pthread_mutexattr_init(&mutex_attr);
-    pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
-    pthread_mutex_init(&shared_frame->mutex, &mutex_attr);
-    pthread_mutexattr_destroy(&mutex_attr);
+    // Initialize header
+    shared_header->width = FRAME_WIDTH;
+    shared_header->height = FRAME_HEIGHT;
+    shared_header->format = 0x20424752; // 'RGB ' in little endian
+    shared_header->size = FRAME_SIZE;
+    shared_header->frame_ready = 0;
     
-    pthread_condattr_t cond_attr;
-    pthread_condattr_init(&cond_attr);
-    pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
-    pthread_cond_init(&shared_frame->cond, &cond_attr);
-    pthread_condattr_destroy(&cond_attr);
-    
-    printf("Shared memory initialized for frame processing\n");
+    printf("Shared memory initialized: %dx%d, %zu bytes total\n", 
+           FRAME_WIDTH, FRAME_HEIGHT, SHARED_TOTAL_SIZE);
     return 0;
 }
 
 static void cleanup_shared_memory(void) {
-    if (shared_frame != NULL) {
-        pthread_mutex_destroy(&shared_frame->mutex);
-        pthread_cond_destroy(&shared_frame->cond);
-        munmap(shared_frame, sizeof(shared_frame_t));
-        shared_frame = NULL;
+    if (shared_header != NULL) {
+        munmap(shared_header, SHARED_TOTAL_SIZE);
+        shared_header = NULL;
+        shared_frame_data = NULL;
     }
     
     if (shm_fd != -1) {
@@ -490,7 +491,8 @@ static void* camera_thread_func(void* arg) {
     (void)arg; // Mark as unused
     char cmd[512];
     snprintf(cmd, sizeof(cmd), 
-        "ffmpeg -f avfoundation -video_size %dx%d -framerate 30 -i \"0\" "
+        "ffmpeg -f avfoundation -pixel_format uyvy422 -framerate 30 "
+        "-video_size %dx%d -i \"0:0\" "
         "-pix_fmt rgb24 -f rawvideo - 2>/dev/null", 
         FRAME_WIDTH, FRAME_HEIGHT);
     
@@ -505,8 +507,8 @@ static void* camera_thread_func(void* arg) {
     while (running) {
         size_t bytes_read = fread(temp_frame, 1, FRAME_SIZE, camera_pipe);
         if (bytes_read == FRAME_SIZE) {
-            if (shared_frame) {
-                gettimeofday(&shared_frame->timestamp, NULL);
+            if (shared_header) {
+                gettimeofday(&shared_header->timestamp, NULL);
             }
             // Frame is ready in temp_frame
         } else if (bytes_read == 0) {
@@ -530,7 +532,7 @@ static int init_macos_camera(void) {
 
 static int capture_frame(unsigned char *frame_data, struct timeval *timestamp) {
     memcpy(frame_data, temp_frame, FRAME_SIZE);
-    *timestamp = shared_frame->timestamp;
+    *timestamp = shared_header->timestamp;
     return 1;
 }
 
@@ -590,7 +592,7 @@ int main(int argc, char **argv) {
     printf("Platform: macOS (AVFoundation via ffmpeg)\n");
     printf("Camera: %s\n", dev_name);
 #endif
-    printf("Resolution: %dx%d @ 30fps\n", FRAME_WIDTH, FRAME_HEIGHT);
+    printf("Resolution: %dx%d @ 20fps\n", FRAME_WIDTH, FRAME_HEIGHT);
     printf("Codec: H.264/AVC\n");
     printf("Video files will be saved in videos/YYYY-MM-DD/HH/MM.mp4\n");
     printf("Press Ctrl+C to stop\n\n");
@@ -643,13 +645,11 @@ int main(int argc, char **argv) {
             }
 
             // Update shared memory for frame processing
-            if (shared_frame) {
-                pthread_mutex_lock(&shared_frame->mutex);
-                memcpy(shared_frame->data, frame_buffer, FRAME_SIZE);
-                shared_frame->timestamp = timestamp;
-                shared_frame->frame_ready = 1;
-                pthread_cond_signal(&shared_frame->cond);
-                pthread_mutex_unlock(&shared_frame->mutex);
+            if (shared_header && shared_frame_data) {
+                // Simple lock-free update (single writer, single reader)
+                memcpy(shared_frame_data, frame_buffer, FRAME_SIZE);
+                shared_header->timestamp = timestamp;
+                shared_header->frame_ready = 1;
             }
         } else if (frame_result < 0) {
             fprintf(stderr, "Frame capture error, continuing...\n");

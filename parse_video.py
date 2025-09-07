@@ -9,46 +9,65 @@ from pathlib import Path
 import sys
 from database import DetectionDatabase
 from tqdm import tqdm
+from shared_memory_reader import SharedMemoryFrameReader
 
 
 class VideoParser:
-    def __init__(self, model_path: str = "yolov8n.pt", db_path: str = "detections.db"):
+    def __init__(self, model_path: str = "models/yolov8n.pt", db_path: str = "detections.db"):
         self.model = YOLO(model_path)
         self.db = DetectionDatabase(db_path)
         
         # Target object classes (COCO dataset class names)
         self.target_classes = {
             0: 'person',
-            1: 'bicycle', 
+            # 1: 'bicycle', 
             2: 'car',
-            3: 'motorcycle',
+            # 3: 'motorcycle',
             5: 'bus',
             15: 'cat',
             16: 'dog',
-            14: 'bird'
+            # 14: 'bird'
         }
         
         self.target_class_names = set(self.target_classes.values())
     
     def process_input(self, input_source: str, confidence_threshold: float = 0.5, 
-                     top_n: int = 10, is_stream: bool = False, max_frames: int = None):
+                     top_n: int = 10, is_stream: bool = False, max_frames: int = None, 
+                     use_shared_memory: bool = False):
         
         # if camera convert to int
         if is_stream and input_source.isdigit():
             input_source = int(input_source)
 
         """Process video file or stream and detect objects."""
-        cap = cv2.VideoCapture(input_source)
         
-        if not cap.isOpened():
-            print(f"Error: Could not open {'stream' if is_stream else 'video'} {input_source}")
-            return
+        # Initialize frame source
+        shared_reader = None
+        cap = None
+        
+        if use_shared_memory:
+            shared_reader = SharedMemoryFrameReader()
+            if not shared_reader.connect():
+                print("Error: Could not connect to shared memory. Make sure video_capture is running.")
+                return
+            shared_reader.start_reading()
+            print("Connected to shared memory frame source")
+        else:
+            cap = cv2.VideoCapture(input_source)
+            if not cap.isOpened():
+                print(f"Error: Could not open {'stream' if is_stream else 'video'} {input_source}")
+                return
         
         frame_count = 0
         detections = []
         
-        # Get video properties for files
-        if not is_stream:
+        # Get video properties and setup progress bar
+        if use_shared_memory:
+            fps = 20.0  # Assume 20fps from C capture (updated)
+            print(f"Processing shared memory stream from video_capture")
+            print("Press Ctrl+C to quit")
+            pbar = tqdm(desc="Processing shared memory", unit="frame")
+        elif not is_stream:
             fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             print(f"Processing video: {input_source}")
@@ -62,14 +81,29 @@ class VideoParser:
         
         try:
             while True:
-                ret, frame = cap.read()
-                if not ret:
-                    if is_stream:
-                        print("Failed to read frame from stream")
-                    break
+                # Read frame from appropriate source
+                if use_shared_memory:
+                    frame_data = shared_reader.wait_for_frame(timeout=1.0)
+                    if frame_data is None:
+                        continue  # Timeout, keep trying
+                    frame, frame_timestamp = frame_data
+                    ret = True
+                else:
+                    ret, frame = cap.read()
+                    if not ret:
+                        if is_stream:
+                            print("Failed to read frame from stream")
+                        break
+                    frame_timestamp = None
                 
                 # Calculate timestamp
-                if is_stream:
+                if use_shared_memory:
+                    # Use precise timestamp from shared memory if available
+                    if frame_timestamp:
+                        timestamp = datetime.fromtimestamp(frame_timestamp)
+                    else:
+                        timestamp = datetime.now()
+                elif is_stream:
                     timestamp = datetime.now()
                 else:
                     timestamp = datetime.now().replace(
@@ -93,10 +127,31 @@ class VideoParser:
                             if class_name in self.target_class_names:
                                 # Get bounding box coordinates
                                 x1, y1, x2, y2 = box.xyxy[0].int().tolist()
-                                bbox = (x1, y1, x2 - x1, y2 - y1)
                                 
-                                # Crop the detected object
-                                crop = frame[y1:y2, x1:x2]
+                                # Check minimum size requirement (100 pixels)
+                                width = x2 - x1
+                                height = y2 - y1
+                                if width < 100 or height < 100:
+                                    continue  # Skip crops smaller than 100px in either dimension
+                                
+                                # Expand bounding box by 25% on each side
+                                padding_x = int(width * 0.25)
+                                padding_y = int(height * 0.25)
+                                
+                                # Get frame dimensions for boundary checking
+                                frame_height, frame_width = frame.shape[:2]
+                                
+                                # Apply padding with boundary checks
+                                x1_expanded = max(0, x1 - padding_x)
+                                y1_expanded = max(0, y1 - padding_y)
+                                x2_expanded = min(frame_width, x2 + padding_x)
+                                y2_expanded = min(frame_height, y2 + padding_y)
+                                
+                                # # Store original bbox for tracking
+                                bbox = (x1, y1, width, height)
+
+                                # Crop the detected object with expanded boundaries
+                                crop = frame[y1_expanded:y2_expanded, x1_expanded:x2_expanded]
                                 
                                 # Convert images to bytes
                                 crop_bytes = self.db.image_to_bytes(crop)
@@ -117,16 +172,19 @@ class VideoParser:
                 pbar.update(1)
                 
                 # Check stream-specific conditions
-                if is_stream and max_frames and frame_count >= max_frames:
+                if (is_stream or use_shared_memory) and max_frames and frame_count >= max_frames:
                     break
         
         except KeyboardInterrupt:
-            if is_stream:
+            if is_stream or use_shared_memory:
                 print("\nStream processing interrupted by user")
         finally:
             pbar.close()
-            cap.release()
-            if is_stream:
+            if shared_reader:
+                shared_reader.disconnect()
+            if cap:
+                cap.release()
+            if is_stream or use_shared_memory:
                 cv2.destroyAllWindows()
             
             # Group detections by object type and keep top N for each type
@@ -164,7 +222,12 @@ class VideoParser:
                       f"(frames {track['start_frame']}-{track['end_frame']}, "
                       f"avg conf: {track['avg_confidence']:.2f})")
             
-            processing_type = "Stream" if is_stream else "Video"
+            if use_shared_memory:
+                processing_type = "Shared memory"
+            elif is_stream:
+                processing_type = "Stream"
+            else:
+                processing_type = "Video"
             print(f"{processing_type} processing complete. Total frames processed: {frame_count}")
 
     def process_video(self, video_path: str, confidence_threshold: float = 0.5, top_n: int = 10):
@@ -175,6 +238,12 @@ class VideoParser:
                       max_frames: int = None, top_n: int = 10):
         """Process a video stream and detect objects."""
         self.process_input(stream_url, confidence_threshold, top_n, is_stream=True, max_frames=max_frames)
+    
+    def process_shared_memory(self, confidence_threshold: float = 0.5, 
+                             max_frames: int = None, top_n: int = 10):
+        """Process frames from shared memory (video_capture.c)."""
+        self.process_input("shared_memory", confidence_threshold, top_n, 
+                          is_stream=True, max_frames=max_frames, use_shared_memory=True)
     
     def _create_tracks_from_detections(self, detections, video_path):
         """Create tracks by grouping detections of same objects across consecutive frames."""
@@ -297,14 +366,24 @@ def main():
                        help='Maximum frames to process for streams')
     parser.add_argument('--top-n', type=int, default=10,
                        help='Number of top confidence detections to save per object type (default: 10)')
+    parser.add_argument('--shared-memory', action='store_true',
+                       help='Process frames from shared memory (requires video_capture to be running)')
     
     args = parser.parse_args()
     
     # Initialize video parser
-    parser_obj = VideoParser(model_path=args.model, db_path=args.db)
+    parser_obj = VideoParser(model_path="models/"+args.model, db_path=args.db)
     
     # Process input
-    if args.stream:
+    if args.shared_memory:
+        print("Starting shared memory processing...")
+        print("Make sure video_capture is running in another terminal!")
+        parser_obj.process_shared_memory(
+            confidence_threshold=args.confidence,
+            max_frames=args.max_frames,
+            top_n=args.top_n
+        )
+    elif args.stream:
         parser_obj.process_stream(
             args.input, 
             confidence_threshold=args.confidence,

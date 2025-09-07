@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-# import torch
+import torch
 from PIL import Image
-# import io
 import numpy as np
-# from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoProcessor, AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 from database import DetectionDatabase
 import cv2
@@ -18,18 +17,19 @@ class CaptionGenerator:
         
         # Load Microsoft GIT model for image captioning with TextVQA capabilities
         print("Loading Microsoft GIT TextVQA captioning model...")
-        # self.processor = AutoProcessor.from_pretrained("microsoft/git-base-textvqa", use_fast=True)
-        # self.model = AutoModelForCausalLM.from_pretrained("microsoft/git-base-textvqa")
+        self.processor = AutoProcessor.from_pretrained("microsoft/git-base-textvqa", use_fast=True)
+        self.model = AutoModelForCausalLM.from_pretrained("microsoft/git-base-textvqa")
         
         # Load sentence transformer for embeddings
         print("Loading embedding model...")
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         
         # Move to GPU if available
-        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        # self.model.to(self.device)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+        self.embedding_model.to(self.device)
 
-        # print(f"Models loaded on device: {self.device}")
+        print(f"Models loaded on device: {self.device}")
     
     def get_object_specific_question(self, object_type: str) -> str:
         """Generate object-specific questions for detailed captioning."""
@@ -63,20 +63,19 @@ class CaptionGenerator:
     def generate_detailed_caption(self, image: Image.Image, object_type: str) -> str:
         """Generate detailed caption using git-base-textvqa with object-specific questions."""
 
-        # image = image.convert("RGB")
+        image = image.convert("RGB")
     
-        # pixel_values = self.processor(images=image, return_tensors="pt").pixel_values
-        # question = self.get_object_specific_question(object_type)[0]
+        pixel_values = self.processor(images=image, return_tensors="pt").pixel_values
+        question = self.get_object_specific_question(object_type)[0]
 
-        # input_ids = self.processor(text=question, add_special_tokens=False).input_ids
-        # input_ids = [self.processor.tokenizer.cls_token_id] + input_ids
-        # input_ids = torch.tensor(input_ids).unsqueeze(0)
+        input_ids = self.processor(text=question, add_special_tokens=False).input_ids
+        input_ids = [self.processor.tokenizer.cls_token_id] + input_ids
+        input_ids = torch.tensor(input_ids).unsqueeze(0)
 
-        # generated_ids = self.model.generate(pixel_values=pixel_values, input_ids=input_ids, max_length=50)
-        # caption = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        # return caption
-
-        return object_type
+        generated_ids = self.model.generate(pixel_values=pixel_values, input_ids=input_ids, max_length=50)
+        caption = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        return object_type + ": " + caption
+        # return object_type
 
     def generate_embeddings(self, caption: str) -> np.ndarray:
         """Generate embeddings from caption text."""
