@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# captions detections from the smart video system database
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import sqlite3

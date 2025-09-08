@@ -1,0 +1,43 @@
+Create a security camera software to parse video and video streams and detect, tag, process objects of interest.
+
+parse_video.py is the script. It will detect: 
+[cars, person, bicycle, motorcycle, bus, cat, dog, bird].
+Create a database to store detections. For each detection save:
+[object_type, time, crop_of_object, full_frame, original_video_link, frame_num_original_video, caption=null, embeddings=null]
+When detecting the same object multiple times, only save to database the top N (parameter, default=10) frames to database, where the top N are the ones with the highest confidence    
+Group detections of the same object together. If object is detected multiple frames in a row, save to database the track of bounding boxes.
+
+caption_crops.py
+Use a model to parse the database and caption all detections that were not captioned before.
+Captioning for cars means extracting color, model, type of car, and if they are towing or carrying anything.
+Captioning for people means extracting hair and clothes colors, approximate age, sex, if have a backpack, hat, or other articles of clothing or accessories in their hands.
+Caption the detection crop and save the 'caption' column in the database.
+Also save image embeddings in 'embeddings' column in the database.
+For each individual track of an object in the database, find the top single frame by detection confidence, and 
+create a caption of that frame only, no need to parse every single frame of the same object!
+
+
+Implementation details:
+Database: SQLlite
+Detection model: https://huggingface.co/Ultralytics/YOLOv8/tree/main
+
+Captioning model: https://huggingface.co/Salesforce/blip-image-captioning-base
+or: https://huggingface.co/microsoft/git-base
+
+
+Create a webpage to show the detections from the database. 
+Organize detection by data and time. If I click on a detection, it will play the original video from 5 seconds before and after.
+Allow to search for detection types.
+
+
+Write code in low level C that works on linux and os x to read from a stream or webcam. 
+It should save the stream by date and time and hours directories and save video 
+in 1m min intervals named after the minute in the hour. 
+It should also make the frames available for processing to parse_video. 
+The video should be compressed h265 before saving in mp4 format.
+
+Add a AI agent to web_viewer in ai_agent.py. The agent allows to search 
+the detections database with a query prompt: "Find all red cars".  
+This AI agent reads all captions and find all matches with the query prompt.
+Use SentenceTransformer and model 'all-MiniLM-L6-v2' for this task.
+Add a search by query on the web_viewer.

@@ -1,40 +1,4 @@
-# Core Computer Vision & Image Processing
-opencv-python>=4.8.0
-numpy>=1.24.0
-Pillow>=10.0.0
-
-# Machine Learning and AI Models
-ultralytics>=8.0.0           # YOLOv8 for object detection
-torch>=2.0.0                 # PyTorch backend
-torchvision>=0.15.0          # Vision transformers
-transformers>=4.30.0         # Hugging Face models for BLIP captioning
-sentence-transformers>=2.2.0 # Embeddings for semantic search
-
-# Web Framework & API
-Flask>=2.3.0                 # Web viewer interface
-
-# Progress & Utility Libraries
-tqdm>=4.65.0                 # Progress bars for video processing
-requests>=2.31.0             # HTTP requests (model downloads)
-
-# Scientific Computing (for embeddings and analysis)
-scikit-learn>=1.3.0          # ML utilities for similarity search
-faiss-cpu>=1.7.4             # Fast similarity search (CPU version)
-
-# Optional GPU acceleration (uncomment if you have CUDA)
-# faiss-gpu>=1.7.4           # Fast similarity search (GPU version)
-# torch-audio>=2.0.0         # Audio processing support
-
-# Development & Testing
-pytest>=7.4.0               # Testing framework
-pytest-cov>=4.1.0           # Coverage reporting
-
-# Built-in Python modules (no installation needed):
-# sqlite3 - Database
-# argparse - Command line parsing  
-# datetime - Time handling
-# pathlib - Path utilities
-# threading - Multi-threading
-# multiprocessing - Shared memory support
-# json - JSON handling
-# os, sys - System utilities
+opencv-python>=4.5.0
+numpy>=1.20.0
+ultralytics>=8.0.0
+tqdm>=4.60.0
