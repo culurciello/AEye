@@ -340,7 +340,7 @@ class VideoParser:
 
 def main():
     parser = argparse.ArgumentParser(description='Parse video for object detection')
-    parser.add_argument('input', help='Video file path or stream URL')
+    parser.add_argument('input', help='Video file path, webcam index (e.g., 0), or stream URL (e.g., rtsp://...)')
     parser.add_argument('--model', default='yolov8n.pt', 
                        help='YOLOv8 model path (default: yolov8n.pt)')
     parser.add_argument('--confidence', type=float, default=0.15,
@@ -348,7 +348,7 @@ def main():
     parser.add_argument('--db', default='detections.db',
                        help='Database path (default: detections.db)')
     parser.add_argument('--stream', action='store_true',
-                       help='Process input as stream instead of video file')
+                       help='Force processing as stream (auto-detected for webcam/URLs)')
     parser.add_argument('--max_frames', type=int,
                        help='Maximum frames to process for streams')
     parser.add_argument('--continuous', action='store_true',
@@ -361,22 +361,50 @@ def main():
     # Initialize video parser
     parser_obj = VideoParser(model_path=args.model, db_path=args.db)
     
-    # Process input
-    if args.stream:
+    # Auto-detect input type and process accordingly
+    input_str = args.input
+    
+    # Check if input is a webcam index (digit)
+    if input_str.isdigit():
+        print(f"Detected webcam input: {input_str}")
         parser_obj.process_stream(
-            args.input, 
+            input_str, 
             confidence_threshold=args.confidence,
             max_frames=args.max_frames,
             continuous=args.continuous,
             show_live=getattr(args, 'show_live', False),
             save_tracks=True
         )
+    # Check if input is a stream URL (starts with rtsp://, http://, etc.)
+    elif input_str.startswith(('rtsp://', 'http://', 'https://', 'tcp://', 'udp://')):
+        print(f"Detected stream input: {input_str}")
+        parser_obj.process_stream(
+            input_str, 
+            confidence_threshold=args.confidence,
+            max_frames=args.max_frames,
+            continuous=args.continuous,
+            show_live=getattr(args, 'show_live', False),
+            save_tracks=True
+        )
+    # Check if --stream flag is explicitly set
+    elif args.stream:
+        print(f"Processing as stream (--stream flag): {input_str}")
+        parser_obj.process_stream(
+            input_str, 
+            confidence_threshold=args.confidence,
+            max_frames=args.max_frames,
+            continuous=args.continuous,
+            show_live=getattr(args, 'show_live', False),
+            save_tracks=True
+        )
+    # Otherwise treat as video file
     else:
-        if not Path(args.input).exists():
-            print(f"Error: Video file {args.input} does not exist")
+        if not Path(input_str).exists():
+            print(f"Error: Video file {input_str} does not exist")
             sys.exit(1)
         
-        parser_obj.process_video(args.input, confidence_threshold=args.confidence, continuous=args.continuous, show_live=getattr(args, 'show_live', False), save_tracks=True)
+        print(f"Detected video file: {input_str}")
+        parser_obj.process_video(input_str, confidence_threshold=args.confidence, continuous=args.continuous, show_live=getattr(args, 'show_live', False), save_tracks=True)
 
 
 if __name__ == "__main__":
