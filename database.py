@@ -70,7 +70,8 @@ class DetectionDatabase:
     def save_detection(self, object_type: str, timestamp: datetime, 
                       crop_image: bytes,
                       original_video_link: str, frame_num: int,
-                      confidence: float, bbox: Tuple[int, int, int, int]) -> int:
+                      confidence: float, bbox: Tuple[int, int, int, int],
+                      caption: str = None) -> int:
         """Save a detection to the database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -79,10 +80,10 @@ class DetectionDatabase:
             INSERT INTO detections 
             (object_type, time, crop_of_object,
              original_video_link, frame_num_original_video, confidence, 
-             bbox_x, bbox_y, bbox_width, bbox_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             bbox_x, bbox_y, bbox_width, bbox_height, caption)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (object_type, timestamp, crop_image,
-              original_video_link, frame_num, confidence, *bbox))
+              original_video_link, frame_num, confidence, *bbox, caption))
         
         detection_id = cursor.lastrowid
         conn.commit()

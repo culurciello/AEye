@@ -1,63 +1,26 @@
-# My2ndEye - Advanced Video Surveillance & AI Detection System
+# m2e - Video Surveillance & AI Detection System
 
-A comprehensive cross-platform security camera system that combines high-performance video capture with advanced AI object detection and analysis. The system captures video streams with H.264/5 compression, processes them with YOLO models, and provides a complete web interface for viewing and analyzing detections.
-
-
-## Usage Examples:
-
-Default EC mode:
-
-```
-python3 smart_video_system.py -r rtsp://192.168.6.244:554/11 --enable-ai --show-frames --show-detections
-```
+A comprehensive cross-platform security camera system that combines high-performance video capture with advanced AI object detection and analysis. The system captures video streams with H.264 compression, processes them with YOLO models, and provides a complete web interface for viewing and analyzing detections.
 
 
-### Basic Video Recording (No AI)
+### Installation
+
+TBD
+
+
+### Usage
+
+**Process captured video with AI:**
 ```bash
-# Record from webcam
-python3 smart_video_system.py -w 0
+# Process recent video files
+python processor.py videos/2024-01-15/09/00.mp4 --confidence 0.15
 
-# Record from RTSP stream
-python3 smart_video_system.py -r rtsp://192.168.6.244:554/11
-
-# Record with display
-python3 smart_video_system.py -w 0 --show-frames
+# Or process live frames (while capture is running)
+python processor.py 0 --stream --max-frames 1000
 ```
 
-### AI-Enhanced Recording
+**View results in web interface:**
 ```bash
-# Record with AI detection
-python3 smart_video_system.py -r rtsp://192.168.6.244:554/11 --enable-ai
-
-# Record with AI and real-time display
-python3 smart_video_system.py -w 0 --enable-ai --show-frames --show-detections
-
-# Custom AI settings
-python3 smart_video_system.py -w 0 --enable-ai --model yolov8s.pt --confidence 0.3
+python web_viewer.py
+# Visit http://localhost:3000
 ```
-
-### Search Existing Data
-```bash
-# Search without recording
-python3 smart_video_system.py --search "red car"
-python3 smart_video_system.py --search "person walking"
-```
-
-### Individual Service Testing
-```bash
-# Test recording service only
-python3 video_recording_service.py -r rtsp://192.168.6.244:554/11 --show-frames
-
-# Test detection service with image
-python3 detection_service.py --test-image photo.jpg --search "car"
-
-# Test semantic search
-python3 ai_agent.py --search "blue vehicle" --db detections.db
-```
-
-
-
-#### ctronics camera:
-
-rtsp://192.168.6.244:554/11
-

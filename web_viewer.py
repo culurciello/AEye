@@ -5,7 +5,7 @@ import os
 import sqlite3
 import json
 from database import DetectionDatabase
-from ai_agent import SemanticSearchAgent
+# from ai_agent import SemanticSearchAgent
 import cv2
 import argparse
 
@@ -14,7 +14,7 @@ app = Flask(__name__)
 class DetectionViewer:
     def __init__(self, db_path: str = "detections.db"):
         self.db = DetectionDatabase(db_path)
-        self.search_agent = SemanticSearchAgent(db_path)
+        # self.search_agent = SemanticSearchAgent(db_path)
     
     def get_detections_by_date(self, date_filter=None, object_type_filter=None, 
                               limit=100, offset=0):
@@ -298,74 +298,6 @@ def api_detection_fullframe(detection_id):
     # This endpoint is kept for compatibility but returns an error
     return jsonify({'error': 'Full frame images are no longer stored. Use video endpoint instead.'}), 404
 
-def find_matching_video_file(original_video_link, detection_time):
-    """Find the closest matching video file for a detection."""
-    import datetime
-    from pathlib import Path
-    
-    # If it's already a valid file path, return it
-    if os.path.exists(original_video_link):
-        return original_video_link
-    
-    # For streaming sources, we need to find the corresponding saved video file
-    # Parse the detection time to find the right video file
-    try:
-        # Convert detection time to datetime
-        if isinstance(detection_time, str):
-            # Handle various datetime formats
-            for fmt in ['%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M']:
-                try:
-                    dt = datetime.datetime.strptime(detection_time, fmt)
-                    break
-                except ValueError:
-                    continue
-            else:
-                # If all formats fail, return None
-                return None
-        else:
-            dt = detection_time
-        
-        # Build expected video path: videos/YYYY-MM-DD/HH/MM.mp4
-        date_str = dt.strftime('%Y-%m-%d')
-        hour_str = dt.strftime('%H')
-        minute_str = dt.strftime('%M')
-        
-        expected_path = f"videos/{date_str}/{hour_str}/{minute_str}.mp4"
-        
-        if os.path.exists(expected_path):
-            return expected_path
-        
-        # Try relative to lib/ directory for newer structure
-        lib_path = f"lib/videos/{date_str}/{hour_str}/{minute_str}.mp4"
-        if os.path.exists(lib_path):
-            return lib_path
-        
-        # Look for video files within ±2 minutes of the detection time
-        videos_dir = Path("videos")
-        lib_videos_dir = Path("lib/videos")
-        
-        for base_dir in [videos_dir, lib_videos_dir]:
-            if not base_dir.exists():
-                continue
-                
-            date_dir = base_dir / date_str / hour_str
-            if not date_dir.exists():
-                continue
-            
-            # Check ±2 minutes around the target minute
-            target_minute = int(minute_str)
-            for offset in range(-2, 3):  # -2, -1, 0, 1, 2
-                check_minute = (target_minute + offset) % 60
-                check_file = date_dir / f"{check_minute:02d}.mp4"
-                if check_file.exists():
-                    return str(check_file)
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error finding video file: {e}")
-        return None
-
 @app.route('/api/detection/<int:detection_id>/video')
 def api_detection_video(detection_id):
     """Get video segment around detection."""
@@ -373,20 +305,11 @@ def api_detection_video(detection_id):
     if not detection:
         return jsonify({'error': 'Detection not found'}), 404
     
-    original_video_link = detection[4]  # original_video_link
-    frame_num = detection[5]           # frame_num_original_video
-    detection_time = detection[2]      # time
+    video_path = detection[4]  # original_video_link
+    frame_num = detection[5]   # frame_num_original_video
     
-    # Find the actual video file
-    video_path = find_matching_video_file(original_video_link, detection_time)
-    
-    if not video_path:
-        return jsonify({
-            'error': 'Video file not found',
-            'original_link': original_video_link,
-            'detection_time': detection_time,
-            'note': 'For streaming sources, ensure video files are saved in videos/YYYY-MM-DD/HH/MM.mp4 format'
-        }), 404
+    if not os.path.exists(video_path):
+        return jsonify({'error': 'Video file not found'}), 404
     
     # Get video info
     cap = cv2.VideoCapture(video_path)
@@ -416,19 +339,11 @@ def api_detection_video_stream(detection_id):
     if not detection:
         return "Detection not found", 404
     
-    original_video_link = detection[4]  # original_video_link
-    detection_time = detection[2]       # time
+    video_path = detection[4]  # original_video_link
     # frame_num = detection[5]   # frame_num_original_video (for future use)
     
-    # Find the actual video file
-    video_path = find_matching_video_file(original_video_link, detection_time)
-    
-    if not video_path:
-        return jsonify({
-            'error': 'Video file not found',
-            'original_link': original_video_link,
-            'detection_time': detection_time
-        }), 404
+    if not os.path.exists(video_path):
+        return "Video file not found", 404
     
     # Get range header for partial content support
     range_header = request.headers.get('Range')
@@ -494,7 +409,15 @@ def api_object_types():
     conn = sqlite3.connect(viewer.db.db_path)
     cursor = conn.cursor()
     
-    cursor.execute('SELECT DISTINCT object_type FROM tracks ORDER BY object_type')
+    # Try tracks first, then fall back to detections
+    cursor.execute('SELECT COUNT(*) FROM tracks')
+    track_count = cursor.fetchone()[0]
+    
+    if track_count > 0:
+        cursor.execute('SELECT DISTINCT object_type FROM tracks ORDER BY object_type')
+    else:
+        cursor.execute('SELECT DISTINCT object_type FROM detections ORDER BY object_type')
+    
     types = [row[0] for row in cursor.fetchall()]
     conn.close()
     
@@ -513,7 +436,8 @@ def api_search():
     threshold = data.get('threshold', 0.3)
     
     try:
-        results = viewer.search_agent.search(query, top_k=top_k, similarity_threshold=threshold)
+        # results = viewer.search_agent.search(query, top_k=top_k, similarity_threshold=threshold)
+        return jsonify({'error': 'Semantic search not available'}), 501
         
         # Convert results to JSON-serializable format
         search_results = []
@@ -556,7 +480,8 @@ def api_index_captions():
     force_reindex = data.get('force_reindex', False)
     
     try:
-        count = viewer.search_agent.index_captions(force_reindex=force_reindex)
+        # count = viewer.search_agent.index_captions(force_reindex=force_reindex)
+        return jsonify({'error': 'Caption indexing not available'}), 501
         return jsonify({
             'message': f'Successfully indexed {count} captions',
             'indexed_count': count
@@ -569,7 +494,8 @@ def api_index_captions():
 def api_search_suggestions():
     """API endpoint to get search query suggestions."""
     object_type = request.args.get('type')
-    suggestions = viewer.search_agent.suggest_queries(object_type=object_type)
+    # suggestions = viewer.search_agent.suggest_queries(object_type=object_type)
+    suggestions = []
     
     return jsonify({'suggestions': suggestions})
 

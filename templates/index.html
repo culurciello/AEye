@@ -22,6 +22,7 @@
             color: white;
             padding: 1rem 0;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: relative;
         }
 
         .container {
@@ -39,6 +40,32 @@
         .header p {
             text-align: center;
             opacity: 0.9;
+        }
+
+        .dark-mode-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .dark-mode-toggle:hover {
+            background: rgba(255,255,255,0.3);
+            transform: scale(1.05);
+        }
+
+        .dark-mode-toggle .icon {
+            font-size: 16px;
         }
 
         .controls {
@@ -338,6 +365,120 @@
             margin-left: 8px;
         }
 
+        /* Dark Mode Styles */
+        body.dark-mode {
+            background-color: #121212;
+            color: #e0e0e0;
+        }
+
+        body.dark-mode .controls {
+            background: #1e1e1e;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        body.dark-mode .search-group label {
+            color: #e0e0e0;
+        }
+
+        body.dark-mode .search-group input,
+        body.dark-mode .search-group select {
+            background: #2a2a2a;
+            border-color: #444;
+            color: #e0e0e0;
+        }
+
+        body.dark-mode .search-group input:focus,
+        body.dark-mode .search-group select:focus {
+            border-color: #667eea;
+        }
+
+        body.dark-mode .stats {
+            background: #1e1e1e;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        body.dark-mode .stat-card {
+            background: #2a2a2a;
+        }
+
+        body.dark-mode .stat-label {
+            color: #b0b0b0;
+        }
+
+        body.dark-mode .detection-card {
+            background: #1e1e1e;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        body.dark-mode .detection-card:hover {
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        body.dark-mode .detection-time {
+            color: #b0b0b0;
+        }
+
+        body.dark-mode .detection-caption {
+            color: #c0c0c0;
+        }
+
+        body.dark-mode .modal-content {
+            background: #1e1e1e;
+        }
+
+        body.dark-mode .modal-body {
+            background: #1e1e1e;
+        }
+
+        body.dark-mode .detail-item {
+            background: #2a2a2a;
+        }
+
+        body.dark-mode .detail-label {
+            color: #e0e0e0;
+        }
+
+        body.dark-mode .detail-value {
+            color: #b0b0b0;
+        }
+
+        body.dark-mode .page-btn {
+            background: #2a2a2a;
+            border-color: #444;
+            color: #e0e0e0;
+        }
+
+        body.dark-mode .page-btn:hover {
+            background: #667eea;
+            border-color: #667eea;
+        }
+
+        body.dark-mode .suggestion-btn {
+            background: #2a2a2a;
+            border-color: #444;
+            color: #e0e0e0;
+        }
+
+        body.dark-mode .suggestion-btn:hover {
+            background: #667eea;
+            border-color: #667eea;
+        }
+
+        body.dark-mode .search-result-info {
+            background: #1a2332;
+            border-color: #2d4a66;
+            color: #a8c8ec;
+        }
+
+        body.dark-mode .loading,
+        body.dark-mode .no-results {
+            color: #b0b0b0;
+        }
+
+        body.dark-mode .error {
+            color: #ff6b6b;
+        }
+
         @media (max-width: 768px) {
             .controls {
                 flex-direction: column;
@@ -356,6 +497,12 @@
             .header h1 {
                 font-size: 2rem;
             }
+
+            .dark-mode-toggle {
+                position: static;
+                margin: 10px auto 0;
+                width: fit-content;
+            }
         }
     </style>
 </head>
@@ -365,6 +512,10 @@
             <h1>My 2nd Eye</h1>
             <p>Security Camera Detection Viewer</p>
         </div>
+        <button class="dark-mode-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">
+            <span class="icon" id="darkModeIcon">🌙</span>
+            <span id="darkModeText">Dark</span>
+        </button>
     </div>
 
     <div class="container">
@@ -457,6 +608,7 @@
             loadStats();
             loadDetections();
             loadSearchSuggestions();
+            initializeDarkMode();
             
             // Add enter key support for semantic search
             document.getElementById('semanticQuery').addEventListener('keypress', function(e) {
@@ -488,20 +640,28 @@
                 const response = await fetch('/api/stats');
                 const stats = await response.json();
                 
-                // Use track statistics instead of detection statistics
-                document.getElementById('totalCount').textContent = stats.total_tracks;
+                // Use track statistics if available, otherwise detection statistics
+                const hasTracksData = stats.total_tracks > 0;
+                const totalCount = hasTracksData ? stats.total_tracks : stats.total_count;
+                const label = hasTracksData ? 'Total Tracks' : 'Total Detections';
                 
-                // Calculate total pages based on tracks
-                totalPages = Math.ceil(stats.total_tracks / detectionsPerPage);
+                document.getElementById('totalCount').textContent = totalCount;
+                document.querySelector('#statsContainer .stat-label').textContent = label;
                 
-                // Create additional stat cards for track object types
+                // Calculate total pages
+                totalPages = Math.ceil(totalCount / detectionsPerPage);
+                
+                // Create additional stat cards
                 const statsContainer = document.getElementById('statsContainer');
-                stats.track_counts.slice(0, 4).forEach(([type, count]) => {
+                const counts = hasTracksData ? stats.track_counts : stats.object_counts;
+                const countLabel = hasTracksData ? 'Tracks' : 'Detections';
+                
+                counts.slice(0, 4).forEach(([type, count]) => {
                     const statCard = document.createElement('div');
                     statCard.className = 'stat-card';
                     statCard.innerHTML = `
                         <div class="stat-number">${count}</div>
-                        <div class="stat-label">${type.charAt(0).toUpperCase() + type.slice(1)} Tracks</div>
+                        <div class="stat-label">${type.charAt(0).toUpperCase() + type.slice(1)} ${countLabel}</div>
                     `;
                     statsContainer.appendChild(statCard);
                 });
@@ -512,7 +672,13 @@
 
         async function loadDetections() {
             const container = document.getElementById('detectionsContainer');
-            container.innerHTML = '<div class="loading">Loading tracks...</div>';
+            
+            // Check if we should load tracks or detections
+            const statsResponse = await fetch('/api/stats');
+            const stats = await statsResponse.json();
+            const useTrackData = stats.total_tracks > 0;
+            
+            container.innerHTML = `<div class="loading">Loading ${useTrackData ? 'tracks' : 'detections'}...</div>`;
 
             try {
                 // Get current filters
@@ -530,13 +696,14 @@
                 if (objectType) params.append('type', objectType);
                 if (date) params.append('date', date);
 
-                const response = await fetch(`/api/tracks?${params}`);
-                const tracks = await response.json();
+                const endpoint = useTrackData ? '/api/tracks' : '/api/detections';
+                const response = await fetch(`${endpoint}?${params}`);
+                const items = await response.json();
 
-                if (tracks.length === 0) {
+                if (items.length === 0) {
                     container.innerHTML = `
                         <div class="no-results">
-                            <h3>No tracks found</h3>
+                            <h3>No ${useTrackData ? 'tracks' : 'detections'} found</h3>
                             <p>Try adjusting your search filters</p>
                         </div>
                     `;
@@ -544,12 +711,12 @@
                     return;
                 }
 
-                // Create track grid
+                // Create grid
                 const grid = document.createElement('div');
                 grid.className = 'detections-grid';
 
-                tracks.forEach(track => {
-                    const card = createTrackCard(track);
+                items.forEach(item => {
+                    const card = useTrackData ? createTrackCard(item) : createDetectionCard(item);
                     grid.appendChild(card);
                 });
 
@@ -561,8 +728,8 @@
                 document.getElementById('pageInfo').textContent = `Page ${currentPage}/${totalPages}`;
 
             } catch (error) {
-                console.error('Error loading tracks:', error);
-                container.innerHTML = '<div class="no-results"><h3>Error loading tracks</h3></div>';
+                console.error(`Error loading ${useTrackData ? 'tracks' : 'detections'}:`, error);
+                container.innerHTML = `<div class="no-results"><h3>Error loading ${useTrackData ? 'tracks' : 'detections'}</h3></div>`;
             }
         }
 
@@ -982,6 +1149,36 @@
                 console.error('Error indexing captions:', error);
                 statusDiv.textContent = 'Indexing failed. Please try again.';
                 statusDiv.style.color = '#dc3545';
+            }
+        }
+
+        // Dark mode functionality
+        function initializeDarkMode() {
+            const savedTheme = localStorage.getItem('darkMode');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            
+            if (savedTheme === 'true' || (!savedTheme && prefersDark)) {
+                document.body.classList.add('dark-mode');
+                updateDarkModeToggle(true);
+            }
+        }
+
+        function toggleDarkMode() {
+            const isDarkMode = document.body.classList.toggle('dark-mode');
+            localStorage.setItem('darkMode', isDarkMode.toString());
+            updateDarkModeToggle(isDarkMode);
+        }
+
+        function updateDarkModeToggle(isDark) {
+            const icon = document.getElementById('darkModeIcon');
+            const text = document.getElementById('darkModeText');
+            
+            if (isDark) {
+                icon.textContent = '☀️';
+                text.textContent = 'Light';
+            } else {
+                icon.textContent = '🌙';
+                text.textContent = 'Dark';
             }
         }
 
