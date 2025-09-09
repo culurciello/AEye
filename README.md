@@ -1,26 +1,22 @@
-# m2e - Video Surveillance & AI Detection System
+# m2e - Video Object Detection
 
-A comprehensive cross-platform security camera system that combines high-performance video capture with advanced AI object detection and analysis. The system captures video streams with H.264 compression, processes them with YOLO models, and provides a complete web interface for viewing and analyzing detections.
+AI-powered object detection for video files with web interface.
 
+## Usage
 
-### Installation
-
-TBD
-
-
-### Usage
-
-**Process captured video with AI:**
+**Process video:**
 ```bash
-# Process recent video files
-python processor.py videos/2024-01-15/09/00.mp4 --confidence 0.15
-
-# Or process live frames (while capture is running)
-python processor.py 0 --stream --max-frames 1000
+python processor.py video.mp4 --confidence 0.5
 ```
 
-**View results in web interface:**
+**View results:**
 ```bash
-python web_viewer.py
+python web_viewer.py --port 3000
 # Visit http://localhost:3000
 ```
+
+## Options
+
+- `--confidence`: Detection threshold (0.0-1.0)
+- `--show-live`: Display video during processing
+- `--stream`: Process camera/stream input

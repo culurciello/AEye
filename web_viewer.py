@@ -5,7 +5,6 @@ import os
 import sqlite3
 import json
 from database import DetectionDatabase
-# from ai_agent import SemanticSearchAgent
 import cv2
 import argparse
 
@@ -14,136 +13,122 @@ app = Flask(__name__)
 class DetectionViewer:
     def __init__(self, db_path: str = "detections.db"):
         self.db = DetectionDatabase(db_path)
-        # self.search_agent = SemanticSearchAgent(db_path)
+        self.db_path = db_path
+    
+    def _get_connection(self):
+        """Get database connection."""
+        return sqlite3.connect(self.db_path)
     
     def get_detections_by_date(self, date_filter=None, object_type_filter=None, 
                               limit=100, offset=0):
         """Get detections with optional filtering."""
-        conn = sqlite3.connect(self.db.db_path)
-        cursor = conn.cursor()
-        
-        # Use explicit column names for better maintainability
-        query = """SELECT id, object_type, time, crop_of_object, original_video_link, 
-                          frame_num_original_video, caption, embeddings, confidence, 
-                          bbox_x, bbox_y, bbox_width, bbox_height, created_at 
-                   FROM detections WHERE 1=1"""
-        params = []
-        
-        if date_filter:
-            query += " AND DATE(time) = ?"
-            params.append(date_filter)
-        
-        if object_type_filter:
-            query += " AND object_type = ?"
-            params.append(object_type_filter)
-        
-        query += " ORDER BY time DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        
-        cursor.execute(query, params)
-        results = cursor.fetchall()
-        conn.close()
-        
-        return results
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            query = """SELECT id, object_type, time, crop_of_object, original_video_link, 
+                              frame_num_original_video, caption, embeddings, confidence, 
+                              bbox_x, bbox_y, bbox_width, bbox_height, created_at 
+                       FROM detections WHERE 1=1"""
+            params = []
+            
+            if date_filter:
+                query += " AND DATE(time) = ?"
+                params.append(date_filter)
+            
+            if object_type_filter:
+                query += " AND object_type = ?"
+                params.append(object_type_filter)
+            
+            query += " ORDER BY time DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            
+            cursor.execute(query, params)
+            return cursor.fetchall()
     
     def get_detection_stats(self):
         """Get statistics about detections."""
-        conn = sqlite3.connect(self.db.db_path)
-        cursor = conn.cursor()
-        
-        # Get total counts by object type
-        cursor.execute('''
-            SELECT object_type, COUNT(*) as count 
-            FROM detections 
-            GROUP BY object_type 
-            ORDER BY count DESC
-        ''')
-        object_counts = cursor.fetchall()
-        
-        # Get detections by date
-        cursor.execute('''
-            SELECT DATE(time) as date, COUNT(*) as count 
-            FROM detections 
-            GROUP BY DATE(time) 
-            ORDER BY date DESC 
-            LIMIT 30
-        ''')
-        date_counts = cursor.fetchall()
-        
-        # Get total count
-        cursor.execute('SELECT COUNT(*) FROM detections')
-        total_count = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        return {
-            'object_counts': object_counts,
-            'date_counts': date_counts,
-            'total_count': total_count
-        }
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT object_type, COUNT(*) as count 
+                FROM detections 
+                GROUP BY object_type 
+                ORDER BY count DESC
+            ''')
+            object_counts = cursor.fetchall()
+            
+            cursor.execute('''
+                SELECT DATE(time) as date, COUNT(*) as count 
+                FROM detections 
+                GROUP BY DATE(time) 
+                ORDER BY date DESC 
+                LIMIT 30
+            ''')
+            date_counts = cursor.fetchall()
+            
+            cursor.execute('SELECT COUNT(*) FROM detections')
+            total_count = cursor.fetchone()[0]
+            
+            return {
+                'object_counts': object_counts,
+                'date_counts': date_counts,
+                'total_count': total_count
+            }
     
     def get_tracks_by_date(self, date_filter=None, object_type_filter=None, 
                           limit=100, offset=0):
         """Get tracks with optional filtering."""
-        conn = sqlite3.connect(self.db.db_path)
-        cursor = conn.cursor()
-        
-        # Build query with filters
-        query = "SELECT * FROM tracks WHERE 1=1"
-        params = []
-        
-        if date_filter:
-            query += " AND DATE(start_time) = ?"
-            params.append(date_filter)
-        
-        if object_type_filter:
-            query += " AND object_type = ?"
-            params.append(object_type_filter)
-        
-        query += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        
-        cursor.execute(query, params)
-        results = cursor.fetchall()
-        conn.close()
-        
-        return results
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            query = "SELECT * FROM tracks WHERE 1=1"
+            params = []
+            
+            if date_filter:
+                query += " AND DATE(start_time) = ?"
+                params.append(date_filter)
+            
+            if object_type_filter:
+                query += " AND object_type = ?"
+                params.append(object_type_filter)
+            
+            query += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            
+            cursor.execute(query, params)
+            return cursor.fetchall()
     
     def get_track_stats(self):
         """Get statistics about tracks."""
-        conn = sqlite3.connect(self.db.db_path)
-        cursor = conn.cursor()
-        
-        # Get total counts by object type
-        cursor.execute('''
-            SELECT object_type, COUNT(*) as count 
-            FROM tracks 
-            GROUP BY object_type 
-            ORDER BY count DESC
-        ''')
-        track_counts = cursor.fetchall()
-        
-        # Get tracks by date
-        cursor.execute('''
-            SELECT DATE(start_time) as date, COUNT(*) as count 
-            FROM tracks 
-            GROUP BY DATE(start_time) 
-            ORDER BY date DESC 
-            LIMIT 30
-        ''')
-        track_date_counts = cursor.fetchall()
-        
-        # Get total count
-        cursor.execute('SELECT COUNT(*) FROM tracks')
-        total_tracks = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        return {
-            'track_counts': track_counts,
-            'track_date_counts': track_date_counts,
-            'total_tracks': total_tracks
-        }
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT object_type, COUNT(*) as count 
+                FROM tracks 
+                GROUP BY object_type 
+                ORDER BY count DESC
+            ''')
+            track_counts = cursor.fetchall()
+            
+            cursor.execute('''
+                SELECT DATE(start_time) as date, COUNT(*) as count 
+                FROM tracks 
+                GROUP BY DATE(start_time) 
+                ORDER BY date DESC 
+                LIMIT 30
+            ''')
+            track_date_counts = cursor.fetchall()
+            
+            cursor.execute('SELECT COUNT(*) FROM tracks')
+            total_tracks = cursor.fetchone()[0]
+            
+            return {
+                'track_counts': track_counts,
+                'track_date_counts': track_date_counts,
+                'total_tracks': total_tracks
+            }
     
 
 # Initialize viewer
@@ -287,16 +272,6 @@ def api_detection_image(detection_id):
     crop_bytes = detection[3]  # crop_of_object
     return Response(crop_bytes, mimetype='image/jpeg')
 
-@app.route('/api/detection/<int:detection_id>/fullframe')
-def api_detection_fullframe(detection_id):
-    """Get detection full frame image."""
-    detection = viewer.db.get_detection_by_id(detection_id)
-    if not detection:
-        return "Detection not found", 404
-    
-    # Note: full_frame is no longer stored in the database
-    # This endpoint is kept for compatibility but returns an error
-    return jsonify({'error': 'Full frame images are no longer stored. Use video endpoint instead.'}), 404
 
 @app.route('/api/detection/<int:detection_id>/video')
 def api_detection_video(detection_id):
@@ -340,7 +315,6 @@ def api_detection_video_stream(detection_id):
         return "Detection not found", 404
     
     video_path = detection[4]  # original_video_link
-    # frame_num = detection[5]   # frame_num_original_video (for future use)
     
     if not os.path.exists(video_path):
         return "Video file not found", 404
@@ -405,99 +379,23 @@ def api_detection_video_stream(detection_id):
 @app.route('/api/object_types')
 def api_object_types():
     """Get list of all object types in database."""
-    import sqlite3
-    conn = sqlite3.connect(viewer.db.db_path)
-    cursor = conn.cursor()
-    
-    # Try tracks first, then fall back to detections
-    cursor.execute('SELECT COUNT(*) FROM tracks')
-    track_count = cursor.fetchone()[0]
-    
-    if track_count > 0:
-        cursor.execute('SELECT DISTINCT object_type FROM tracks ORDER BY object_type')
-    else:
-        cursor.execute('SELECT DISTINCT object_type FROM detections ORDER BY object_type')
-    
-    types = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    
-    return jsonify(types)
+    with viewer._get_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT COUNT(*) FROM tracks')
+        track_count = cursor.fetchone()[0]
+        
+        if track_count > 0:
+            cursor.execute('SELECT DISTINCT object_type FROM tracks ORDER BY object_type')
+        else:
+            cursor.execute('SELECT DISTINCT object_type FROM detections ORDER BY object_type')
+        
+        types = [row[0] for row in cursor.fetchall()]
+        
+        return jsonify(types)
 
-@app.route('/api/search', methods=['POST'])
-def api_search():
-    """API endpoint for semantic search of detections."""
-    data = request.get_json()
-    query = data.get('query', '').strip()
-    
-    if not query:
-        return jsonify({'error': 'Query parameter is required'}), 400
-    
-    top_k = data.get('top_k', 20)
-    threshold = data.get('threshold', 0.3)
-    
-    try:
-        # results = viewer.search_agent.search(query, top_k=top_k, similarity_threshold=threshold)
-        return jsonify({'error': 'Semantic search not available'}), 501
-        
-        # Convert results to JSON-serializable format
-        search_results = []
-        for detection_dict, similarity in results:
-            # Create a JSON-safe detection dict (exclude binary data)
-            safe_detection = {
-                'id': detection_dict['id'],
-                'object_type': detection_dict['object_type'],
-                'time': detection_dict['time'],
-                'original_video_link': detection_dict['original_video_link'],
-                'frame_num_original_video': detection_dict['frame_num_original_video'],
-                'caption': detection_dict['caption'],
-                'confidence': detection_dict['confidence'],
-                'bbox_x': detection_dict['bbox_x'],
-                'bbox_y': detection_dict['bbox_y'],
-                'bbox_width': detection_dict['bbox_width'],
-                'bbox_height': detection_dict['bbox_height'],
-                'created_at': detection_dict['created_at']
-            }
-            
-            result = {
-                'detection': safe_detection,
-                'similarity': similarity
-            }
-            search_results.append(result)
-        
-        return jsonify({
-            'query': query,
-            'results': search_results,
-            'total_found': len(search_results)
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f'Search failed: {str(e)}'}), 500
 
-@app.route('/api/index_captions', methods=['POST'])
-def api_index_captions():
-    """API endpoint to index all captions for semantic search."""
-    data = request.get_json() or {}
-    force_reindex = data.get('force_reindex', False)
-    
-    try:
-        # count = viewer.search_agent.index_captions(force_reindex=force_reindex)
-        return jsonify({'error': 'Caption indexing not available'}), 501
-        return jsonify({
-            'message': f'Successfully indexed {count} captions',
-            'indexed_count': count
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f'Indexing failed: {str(e)}'}), 500
 
-@app.route('/api/search/suggestions')
-def api_search_suggestions():
-    """API endpoint to get search query suggestions."""
-    object_type = request.args.get('type')
-    # suggestions = viewer.search_agent.suggest_queries(object_type=object_type)
-    suggestions = []
-    
-    return jsonify({'suggestions': suggestions})
 
 def main():
     parser = argparse.ArgumentParser(description='Web viewer for detections')

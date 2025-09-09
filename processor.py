@@ -55,7 +55,6 @@ class VideoParser:
             return
         
         frame_count = 0
-        detections = []
         
         # Get video properties for files
         if not is_stream:
@@ -149,9 +148,6 @@ class VideoParser:
                 # Update tracks with current frame detections
                 self._update_tracks(frame_detections, frame_count, save_tracks, show_live)
                 
-                # Store detections for non-continuous processing
-                if not save_tracks:
-                    detections.extend(frame_detections)
                 
                 frame_count += 1
                 pbar.update(1)
@@ -202,25 +198,6 @@ class VideoParser:
         if save_tracks:
             completed_tracks = self._finalize_all_tracks(input_source)
             print(f"Processing complete. Total tracks saved: {completed_tracks}")
-        else:
-            # Save all detections to database (legacy mode)
-            print(f"Saving all {len(detections)} detections to database...")
-            for detection in detections:
-                self.db.save_detection(**detection)
-            
-            if detections:
-                # Create tracks from all detections (legacy mode)
-                print("Creating tracks from detections...")
-                tracks = self._create_tracks_from_detections(detections, input_source)
-                
-                print(f"Created {len(tracks)} tracks from {len(detections)} detections")
-                for track in tracks:
-                    print(f"Track {track['id']}: {track['object_type']} "
-                          f"(frames {track['start_frame']}-{track['end_frame']}, "
-                          f"avg conf: {track['avg_confidence']:.2f})")
-            
-            processing_type = "Stream" if is_stream else "Video"
-            print(f"{processing_type} processing complete. Total frames processed: {frame_count}")
 
     def process_video(self, video_path: str, confidence_threshold: float = 0.5, continuous: bool = False, show_live: bool = False, save_tracks: bool = True):
         """Process a video file and detect objects."""
@@ -359,113 +336,6 @@ class VideoParser:
         
         return total_saved
 
-    # Legacy methods for backward compatibility
-    def _create_tracks_from_detections(self, detections, video_path):
-        """Create tracks by grouping detections of same objects across consecutive frames."""
-        if not detections:
-            return []
-        
-        # Sort detections by object type and frame number
-        detections.sort(key=lambda x: (x['object_type'], x['frame_num']))
-        
-        tracks = []
-        current_tracks = {}  # object_type -> current track data
-        
-        for detection in detections:
-            obj_type = detection['object_type']
-            frame_num = detection['frame_num']
-            bbox = detection['bbox']
-            confidence = detection['confidence']
-            timestamp = detection['timestamp']
-            
-            # Check if this continues an existing track
-            track_found = False
-            if obj_type in current_tracks:
-                last_track = current_tracks[obj_type]
-                
-                # Check if this detection continues the track (consecutive or nearby frames)
-                frame_gap = frame_num - last_track['end_frame']
-                
-                if frame_gap <= 3:  # Allow up to 3 frame gap
-                    # Check spatial overlap (simple bounding box distance)
-                    last_bbox = last_track['track_data'][str(last_track['end_frame'])]
-                    bbox_center = (bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2)
-                    last_center = (last_bbox[0] + last_bbox[2]/2, last_bbox[1] + last_bbox[3]/2)
-                    distance = ((bbox_center[0] - last_center[0])**2 + 
-                               (bbox_center[1] - last_center[1])**2)**0.5
-                    
-                    # If objects are close enough, continue track
-                    if distance < 100:  # pixels threshold
-                        last_track['end_frame'] = frame_num
-                        last_track['end_time'] = timestamp
-                        last_track['track_data'][str(frame_num)] = bbox
-                        last_track['confidences'].append(confidence)
-                        last_track['detections'].append(detection)
-                        track_found = True
-            
-            # If no existing track found, start new track
-            if not track_found:
-                # Save previous track if it exists
-                if obj_type in current_tracks:
-                    tracks.append(self._finalize_track(current_tracks[obj_type], video_path))
-                
-                # Start new track
-                current_tracks[obj_type] = {
-                    'object_type': obj_type,
-                    'caption': obj_type,
-                    'start_frame': frame_num,
-                    'end_frame': frame_num,
-                    'start_time': timestamp,
-                    'end_time': timestamp,
-                    'track_data': {str(frame_num): bbox},
-                    'confidences': [confidence],
-                    'detections': [detection]
-                }
-        
-        # Finalize remaining tracks
-        for obj_type, track_data in current_tracks.items():
-            tracks.append(self._finalize_track(track_data, video_path))
-        
-        return tracks
-    
-    def _finalize_track(self, track_data, video_path):
-        """Finalize and save a track to database."""
-        # Find best detection (highest confidence)
-        best_idx = max(range(len(track_data['confidences'])), 
-                      key=lambda i: track_data['confidences'][i])
-        best_detection = track_data['detections'][best_idx]
-        
-        # Calculate average confidence
-        avg_confidence = sum(track_data['confidences']) / len(track_data['confidences'])
-        
-        # Save best detection to database if not already saved
-        if 'id' not in best_detection:
-            detection_id = self.db.save_detection(**best_detection)
-            best_detection['id'] = detection_id
-        
-        # Save track to database
-        track_id = self.db.save_track(
-            object_type=track_data['object_type'],
-            original_video_link=video_path,
-            start_frame=track_data['start_frame'],
-            end_frame=track_data['end_frame'],
-            start_time=track_data['start_time'],
-            end_time=track_data['end_time'],
-            track_data=track_data['track_data'],
-            best_crop_detection_id=best_detection['id'],
-            avg_confidence=avg_confidence,
-            detection_count=len(track_data['detections'])
-        )
-        
-        return {
-            'id': track_id,
-            'object_type': track_data['object_type'],
-            'caption': track_data['object_type'],
-            'start_frame': track_data['start_frame'],
-            'end_frame': track_data['end_frame'],
-            'avg_confidence': avg_confidence,
-            'detection_count': len(track_data['detections'])
-        }
 
 
 def main():

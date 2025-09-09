@@ -1,9 +1,7 @@
 import sqlite3
 import json
-import numpy as np
 from datetime import datetime
 from typing import Optional, List, Tuple
-import io
 
 
 class DetectionDatabase:
@@ -91,40 +89,6 @@ class DetectionDatabase:
         
         return detection_id
     
-    def update_caption_and_embeddings(self, detection_id: int, 
-                                    caption: str, embeddings: np.ndarray):
-        """Update caption and embeddings for a detection."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Convert embeddings to bytes
-        embeddings_bytes = embeddings.tobytes() if embeddings is not None else None
-        
-        cursor.execute('''
-            UPDATE detections 
-            SET caption = ?, embeddings = ?
-            WHERE id = ?
-        ''', (caption, embeddings_bytes, detection_id))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_uncaptioned_detections(self) -> List[Tuple]:
-        """Get all detections that don't have captions yet."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, object_type, crop_of_object, time
-            FROM detections 
-            WHERE caption IS NULL
-        ''')
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        return results
-    
     def get_detection_by_id(self, detection_id: int) -> Optional[Tuple]:
         """Get a specific detection by ID."""
         conn = sqlite3.connect(self.db_path)
@@ -142,26 +106,11 @@ class DetectionDatabase:
         
         return result
     
-    def get_all_detections(self) -> List[Tuple]:
-        """Get all detections."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, object_type, time, crop_of_object, original_video_link, 
-                   frame_num_original_video, caption, embeddings, confidence, 
-                   bbox_x, bbox_y, bbox_width, bbox_height, created_at
-            FROM detections ORDER BY time DESC
-        ''')
-        results = cursor.fetchall()
-        conn.close()
-        
-        return results
-    
     @staticmethod
     def bytes_to_image(image_bytes: bytes):
         """Convert bytes back to image array."""
         import cv2
+        import numpy as np
         nparr = np.frombuffer(image_bytes, np.uint8)
         return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
@@ -219,29 +168,3 @@ class DetectionDatabase:
         
         return result
     
-    def get_detections_with_captions(self) -> List[Tuple]:
-        """Get all detections that have captions."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, object_type, time, crop_of_object, original_video_link, 
-                   frame_num_original_video, caption, embeddings, confidence, 
-                   bbox_x, bbox_y, bbox_width, bbox_height, created_at
-            FROM detections 
-            WHERE caption IS NOT NULL
-            ORDER BY time DESC
-        ''')
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        return results
-    
-    def clear_tracks(self):
-        """Clear all tracks (for regeneration)."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM tracks')
-        conn.commit()
-        conn.close()
