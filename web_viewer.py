@@ -7,6 +7,7 @@ import json
 from database import DetectionDatabase
 import cv2
 import argparse
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -206,15 +207,16 @@ def api_tracks():
             'id': track[0],
             'object_type': track[1],
             'original_video_link': track[2],
-            'start_frame': track[3],
-            'end_frame': track[4],
-            'start_time': track[5],
-            'end_time': track[6],
-            'track_data': json.loads(track[7]),  # Parse JSON string
-            'best_crop_detection_id': track[8],
-            'avg_confidence': track[9],
-            'detection_count': track[10],
-            'created_at': track[11]
+            'recorded_video_path': track[3],
+            'start_frame': track[4],
+            'end_frame': track[5],
+            'start_time': track[6],
+            'end_time': track[7],
+            'track_data': json.loads(track[8]),  # Parse JSON string
+            'best_crop_detection_id': track[9],
+            'avg_confidence': track[10],
+            'detection_count': track[11],
+            'created_at': track[12]
         }
         track_list.append(track_data)
     
@@ -231,15 +233,16 @@ def api_track_detail(track_id):
         'id': track[0],
         'object_type': track[1],
         'original_video_link': track[2],
-        'start_frame': track[3],
-        'end_frame': track[4],
-        'start_time': track[5],
-        'end_time': track[6],
-        'track_data': json.loads(track[7]),  # Parse JSON string
-        'best_crop_detection_id': track[8],
-        'avg_confidence': track[9],
-        'detection_count': track[10],
-        'created_at': track[11]
+        'recorded_video_path': track[3],
+        'start_frame': track[4],
+        'end_frame': track[5],
+        'start_time': track[6],
+        'end_time': track[7],
+        'track_data': json.loads(track[8]),  # Parse JSON string
+        'best_crop_detection_id': track[9],
+        'avg_confidence': track[10],
+        'detection_count': track[11],
+        'created_at': track[12]
     }
     
     return jsonify(track_data)
@@ -251,7 +254,7 @@ def api_track_image(track_id):
     if not track:
         return "Track not found", 404
     
-    best_detection_id = track[8]  # best_crop_detection_id
+    best_detection_id = track[9]  # best_crop_detection_id
     if not best_detection_id:
         return "No detection found for track", 404
     
@@ -276,12 +279,28 @@ def api_detection_image(detection_id):
 @app.route('/api/detection/<int:detection_id>/video')
 def api_detection_video(detection_id):
     """Get video segment around detection."""
+    # Get detection info first to calculate correct video path based on timestamp
     detection = viewer.db.get_detection_by_id(detection_id)
     if not detection:
         return jsonify({'error': 'Detection not found'}), 404
     
-    video_path = detection[4]  # original_video_link
-    frame_num = detection[5]   # frame_num_original_video
+    # Calculate correct video path based on detection timestamp
+    detection_timestamp = detection[2]  # timestamp
+    detection_datetime = datetime.fromisoformat(detection_timestamp.replace('Z', '+00:00')) if isinstance(detection_timestamp, str) else detection_timestamp
+    
+    # Generate the expected video file path based on detection time
+    date_str = detection_datetime.strftime("%Y-%m-%d")
+    hour_str = detection_datetime.strftime("%H")
+    min_str = detection_datetime.strftime("%M")
+    expected_video_path = f"videos/{date_str}/{hour_str}/{min_str}.mp4"
+    
+    if os.path.exists(expected_video_path):
+        video_path = expected_video_path
+    else:
+        # Fall back to original video link
+        video_path = detection[4]  # original_video_link
+    
+    frame_num = detection[5] if detection else 0   # frame_num_original_video
     
     if not os.path.exists(video_path):
         return jsonify({'error': 'Video file not found'}), 404
@@ -292,10 +311,30 @@ def api_detection_video(detection_id):
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
     cap.release()
     
-    # Calculate time offsets
-    detection_time = frame_num / fps if fps > 0 else 0
+    # Calculate time offsets based on detection timestamp within the video file
+    detection_timestamp = detection[2]  # timestamp
+    detection_datetime = datetime.fromisoformat(detection_timestamp.replace('Z', '+00:00')) if isinstance(detection_timestamp, str) else detection_timestamp
+    
+    # Calculate the video file's start time (start of the minute)
+    video_start_time = detection_datetime.replace(second=0, microsecond=0)
+    
+    # Calculate detection time as offset within the video file
+    time_diff = detection_datetime - video_start_time
+    detection_time = time_diff.total_seconds()
+    
     start_time = max(0, detection_time - 5)
-    end_time = min(total_frames / fps if fps > 0 else 0, detection_time + 5)
+    end_time = min(total_frames / fps if fps > 0 else 60, detection_time + 5)
+    
+    # Detection is already loaded above
+    
+    bbox = None
+    if detection:
+        bbox = {
+            'x': detection[9],    # bbox_x
+            'y': detection[10],   # bbox_y  
+            'width': detection[11],   # bbox_width
+            'height': detection[12]   # bbox_height
+        }
     
     return jsonify({
         'video_path': os.path.basename(video_path),
@@ -304,17 +343,33 @@ def api_detection_video(detection_id):
         'end_time': end_time,
         'fps': fps,
         'total_frames': total_frames,
-        'stream_url': f'/api/detection/{detection_id}/video_stream'
+        'stream_url': f'/api/detection/{detection_id}/video_stream',
+        'bbox': bbox
     })
 
 @app.route('/api/detection/<int:detection_id>/video_stream')
 def api_detection_video_stream(detection_id):
     """Stream video segment around detection."""
+    # Get detection info first to calculate correct video path based on timestamp
     detection = viewer.db.get_detection_by_id(detection_id)
     if not detection:
         return "Detection not found", 404
     
-    video_path = detection[4]  # original_video_link
+    # Calculate correct video path based on detection timestamp
+    detection_timestamp = detection[2]  # timestamp
+    detection_datetime = datetime.fromisoformat(detection_timestamp.replace('Z', '+00:00')) if isinstance(detection_timestamp, str) else detection_timestamp
+    
+    # Generate the expected video file path based on detection time
+    date_str = detection_datetime.strftime("%Y-%m-%d")
+    hour_str = detection_datetime.strftime("%H")
+    min_str = detection_datetime.strftime("%M")
+    expected_video_path = f"videos/{date_str}/{hour_str}/{min_str}.mp4"
+    
+    if os.path.exists(expected_video_path):
+        video_path = expected_video_path
+    else:
+        # Fall back to original video link
+        video_path = detection[4]  # original_video_link
     
     if not os.path.exists(video_path):
         return "Video file not found", 404

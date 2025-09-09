@@ -14,6 +14,9 @@ python processor.py 0 --confidence 0.5
 
 # RTSP stream (auto-detected)  
 python processor.py rtsp://ipaddr:554/11 --confidence 0.5
+
+# RTSP stream with recording
+python processor.py rtsp://ipaddr:554/11 --confidence 0.5 --record
 ```
 
 **View results:**
@@ -22,11 +25,19 @@ python web_viewer.py --port 3000
 # Visit http://localhost:3000
 ```
 
+From other PC on same network:
+
+```
+python3 web_viewer.py --host 0.0.0.0 --port 3000
+```
+
+
 ## Options
 
 - `--confidence`: Detection threshold (0.0-1.0)
 - `--show-live`: Display video during processing
-- `--stream`: Process camera/stream input
+- `--stream`: Force processing as stream (auto-detected for webcam/URLs)
+- `--record`: Record video files for streams (saved to videos/date/hour/min.mp4)
 
 
 #### ctronics camera:

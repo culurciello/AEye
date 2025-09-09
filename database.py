@@ -39,6 +39,7 @@ class DetectionDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 object_type TEXT NOT NULL,
                 original_video_link TEXT NOT NULL,
+                recorded_video_path TEXT,  -- Path to recorded video file if available
                 start_frame INTEGER NOT NULL,
                 end_frame INTEGER NOT NULL,
                 start_time TIMESTAMP NOT NULL,
@@ -61,6 +62,13 @@ class DetectionDatabase:
         
         if 'frame_num_original_video' not in columns:
             cursor.execute('ALTER TABLE detections ADD COLUMN frame_num_original_video INTEGER')
+        
+        # Check if we need to add recorded_video_path column to tracks table
+        cursor.execute("PRAGMA table_info(tracks)")
+        track_columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'recorded_video_path' not in track_columns:
+            cursor.execute('ALTER TABLE tracks ADD COLUMN recorded_video_path TEXT')
         
         conn.commit()
         conn.close()
@@ -125,18 +133,18 @@ class DetectionDatabase:
                    start_frame: int, end_frame: int, start_time: datetime, 
                    end_time: datetime, track_data: dict, 
                    best_crop_detection_id: int, avg_confidence: float, 
-                   detection_count: int) -> int:
+                   detection_count: int, recorded_video_path: str = None) -> int:
         """Save a track to the database."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
             INSERT INTO tracks 
-            (object_type, original_video_link, start_frame, end_frame, 
+            (object_type, original_video_link, recorded_video_path, start_frame, end_frame, 
              start_time, end_time, track_data, best_crop_detection_id, 
              avg_confidence, detection_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (object_type, original_video_link, start_frame, end_frame,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (object_type, original_video_link, recorded_video_path, start_frame, end_frame,
               start_time, end_time, json.dumps(track_data), 
               best_crop_detection_id, avg_confidence, detection_count))
         

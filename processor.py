@@ -7,6 +7,7 @@ from ultralytics import YOLO
 import numpy as np
 from pathlib import Path
 import sys
+import os
 from database import DetectionDatabase
 from tqdm import tqdm
 
@@ -38,10 +39,47 @@ class VideoParser:
         self.next_track_id = 1
         self.max_track_gap = 30  # frames
         self.min_track_length = 3  # minimum detections per track
+        
+        # Video recording state
+        self.current_recorded_video_path = None
+    
+    def _create_video_path(self, timestamp: datetime) -> str:
+        """Create video file path with format videos/date/hour/min.mp4"""
+        date_str = timestamp.strftime("%Y-%m-%d")
+        hour_str = timestamp.strftime("%H")
+        min_str = timestamp.strftime("%M")
+        
+        # Create directory structure
+        video_dir = Path(f"videos/{date_str}/{hour_str}")
+        video_dir.mkdir(parents=True, exist_ok=True)
+        
+        return str(video_dir / f"{min_str}.mp4")
+    
+    def _setup_video_writer(self, cap, output_path: str):
+        """Setup video writer to record stream without re-encoding"""
+        # Get video properties from input
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Use H.264 codec for efficient compression
+        fourcc = cv2.VideoWriter_fourcc(*'H264')
+        
+        # Create video writer
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        if not writer.isOpened():
+            print(f"Warning: Could not open video writer for {output_path}")
+            return None
+            
+        print(f"Recording video to: {output_path}")
+        print(f"Video properties: {width}x{height} @ {fps} FPS")
+        
+        return writer
     
     def process_input(self, input_source: str, confidence_threshold: float = 0.5, 
-                     is_stream: bool = False, max_frames: int = None,
-                     continuous: bool = False, show_live: bool = False, save_tracks: bool = True):
+                     is_stream: bool = False, max_seconds: int = None,
+                     continuous: bool = False, show_live: bool = False, save_tracks: bool = True, record_video: bool = False):
         
         # if camera convert to int
         if is_stream and input_source.isdigit():
@@ -55,6 +93,18 @@ class VideoParser:
             return
         
         frame_count = 0
+        start_time_processing = datetime.now() if is_stream and max_seconds else None
+        
+        # Video recording setup
+        video_writer = None
+        current_video_path = None
+        recording_start_time = None
+        
+        if record_video and is_stream:
+            recording_start_time = datetime.now()
+            current_video_path = self._create_video_path(recording_start_time)
+            self.current_recorded_video_path = current_video_path
+            video_writer = self._setup_video_writer(cap, current_video_path)
         
         # Get video properties for files
         if not is_stream:
@@ -85,6 +135,24 @@ class VideoParser:
                         microsecond=int((frame_count / fps) * 1000000) % 1000000
                     )
                 
+                # Handle video recording for streams
+                if record_video and is_stream and video_writer is not None:
+                    # Check if we need to start a new video file (every minute)
+                    if recording_start_time and timestamp.minute != recording_start_time.minute:
+                        # Close current video writer
+                        video_writer.release()
+                        print(f"Finished recording: {current_video_path}")
+                        
+                        # Start new video file
+                        recording_start_time = timestamp
+                        current_video_path = self._create_video_path(recording_start_time)
+                        self.current_recorded_video_path = current_video_path
+                        video_writer = self._setup_video_writer(cap, current_video_path)
+                    
+                    # Write frame to video file
+                    if video_writer and video_writer.isOpened():
+                        video_writer.write(frame)
+                
                 # Run YOLO detection
                 results = self.model(frame, conf=confidence_threshold, verbose=False)
                 
@@ -108,8 +176,21 @@ class VideoParser:
                                 x1, y1, x2, y2 = box.xyxy[0].int().tolist()
                                 bbox = (x1, y1, x2 - x1, y2 - y1)
                                 
-                                # Crop the detected object
-                                crop = frame[y1:y2, x1:x2]
+                                # Expand crop bounds by 25% on each side
+                                crop_w = x2 - x1
+                                crop_h = y2 - y1
+                                expand_w = int(crop_w * 0.25)
+                                expand_h = int(crop_h * 0.25)
+                                
+                                # Calculate expanded coordinates with frame bounds checking
+                                frame_h, frame_w = frame.shape[:2]
+                                crop_x1 = max(0, x1 - expand_w)
+                                crop_y1 = max(0, y1 - expand_h)
+                                crop_x2 = min(frame_w, x2 + expand_w)
+                                crop_y2 = min(frame_h, y2 + expand_h)
+                                
+                                # Crop the detected object with expanded bounds
+                                crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                                 
                                 # Convert images to bytes
                                 crop_bytes = self.db.image_to_bytes(crop)
@@ -182,8 +263,11 @@ class VideoParser:
                         show_live = False  # Disable live display for remaining frames
                 
                 # Check stream-specific conditions
-                if is_stream and max_frames and frame_count >= max_frames:
-                    break
+                if is_stream and max_seconds and start_time_processing:
+                    elapsed_seconds = (datetime.now() - start_time_processing).total_seconds()
+                    if elapsed_seconds >= max_seconds:
+                        print(f"\nStopping processing after {elapsed_seconds:.1f} seconds (max: {max_seconds}s)")
+                        break
         
         except KeyboardInterrupt:
             if is_stream:
@@ -191,6 +275,13 @@ class VideoParser:
         finally:
             pbar.close()
             cap.release()
+            
+            # Clean up video writer
+            if video_writer is not None:
+                video_writer.release()
+                if current_video_path:
+                    print(f"Finished recording: {current_video_path}")
+            
             if show_live:
                 cv2.destroyAllWindows()
     
@@ -204,9 +295,9 @@ class VideoParser:
         self.process_input(video_path, confidence_threshold, is_stream=False, continuous=continuous, show_live=show_live, save_tracks=save_tracks)
     
     def process_stream(self, stream_url: str, confidence_threshold: float = 0.5, 
-                      max_frames: int = None, continuous: bool = False, show_live: bool = False, save_tracks: bool = True):
+                      max_seconds: int = None, continuous: bool = False, show_live: bool = False, save_tracks: bool = True, record_video: bool = False):
         """Process a video stream and detect objects."""
-        self.process_input(stream_url, confidence_threshold, is_stream=True, max_frames=max_frames, continuous=continuous, show_live=show_live, save_tracks=save_tracks)
+        self.process_input(stream_url, confidence_threshold, is_stream=True, max_seconds=max_seconds, continuous=continuous, show_live=show_live, save_tracks=save_tracks, record_video=record_video)
     
     def _update_tracks(self, frame_detections, frame_num, save_tracks, show_live):
         """Update active tracks with current frame detections."""
@@ -305,6 +396,15 @@ class VideoParser:
         # Calculate average confidence
         avg_confidence = sum(d['confidence'] for d in track['detections']) / len(track['detections'])
         
+        # Calculate the correct recorded video path based on track start time
+        recorded_video_path = None
+        if self.current_recorded_video_path:  # Only if we're recording
+            track_start_time = track['start_time']
+            date_str = track_start_time.strftime("%Y-%m-%d")
+            hour_str = track_start_time.strftime("%H")
+            min_str = track_start_time.strftime("%M")
+            recorded_video_path = f"videos/{date_str}/{hour_str}/{min_str}.mp4"
+        
         # Save track
         track_id = self.db.save_track(
             object_type=track['object_type'],
@@ -316,7 +416,8 @@ class VideoParser:
             track_data=track['track_data'],
             best_crop_detection_id=detection_id,
             avg_confidence=avg_confidence,
-            detection_count=len(track['detections'])
+            detection_count=len(track['detections']),
+            recorded_video_path=recorded_video_path
         )
         
         return track_id
@@ -349,12 +450,14 @@ def main():
                        help='Database path (default: detections.db)')
     parser.add_argument('--stream', action='store_true',
                        help='Force processing as stream (auto-detected for webcam/URLs)')
-    parser.add_argument('--max_frames', type=int,
-                       help='Maximum frames to process for streams')
+    parser.add_argument('--max_seconds', type=int, default=None,
+                       help='Maximum seconds to process for streams (default: infinite)')
     parser.add_argument('--continuous', action='store_true',
                        help='Save detections immediately as they are found')
     parser.add_argument('--show-live', action='store_true',
                        help='Display live video with detections during processing')
+    parser.add_argument('--record', action='store_true',
+                       help='Record video files for streams (saved to videos/date/hour/min.mp4)')
 
     args = parser.parse_args()
     
@@ -370,10 +473,11 @@ def main():
         parser_obj.process_stream(
             input_str, 
             confidence_threshold=args.confidence,
-            max_frames=args.max_frames,
+            max_seconds=args.max_seconds,
             continuous=args.continuous,
             show_live=getattr(args, 'show_live', False),
-            save_tracks=True
+            save_tracks=True,
+            record_video=args.record
         )
     # Check if input is a stream URL (starts with rtsp://, http://, etc.)
     elif input_str.startswith(('rtsp://', 'http://', 'https://', 'tcp://', 'udp://')):
@@ -381,10 +485,11 @@ def main():
         parser_obj.process_stream(
             input_str, 
             confidence_threshold=args.confidence,
-            max_frames=args.max_frames,
+            max_seconds=args.max_seconds,
             continuous=args.continuous,
             show_live=getattr(args, 'show_live', False),
-            save_tracks=True
+            save_tracks=True,
+            record_video=args.record
         )
     # Check if --stream flag is explicitly set
     elif args.stream:
@@ -392,10 +497,11 @@ def main():
         parser_obj.process_stream(
             input_str, 
             confidence_threshold=args.confidence,
-            max_frames=args.max_frames,
+            max_seconds=args.max_seconds,
             continuous=args.continuous,
             show_live=getattr(args, 'show_live', False),
-            save_tracks=True
+            save_tracks=True,
+            record_video=args.record
         )
     # Otherwise treat as video file
     else:
