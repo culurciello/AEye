@@ -1,12 +1,28 @@
 import sqlite3
 import json
+import os
 from datetime import datetime
 from typing import Optional, List, Tuple
 
 
 class DetectionDatabase:
-    def __init__(self, db_path: str = "detections.db"):
-        self.db_path = db_path
+    def __init__(self, base_path: str = "data", date: str = None):
+        """
+        Initialize database with day-based sharding.
+        
+        Args:
+            base_path: Base directory for data storage (default: "data")
+            date: Specific date for database (YYYY-MM-DD format). If None, uses current date.
+        """
+        self.base_path = base_path
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        self.date = date
+        self.db_path = os.path.join(base_path, "db", f"detections_{date}.db")
+        
+        # Ensure db directory exists
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
         self.init_database()
     
     def init_database(self):
@@ -72,6 +88,33 @@ class DetectionDatabase:
         
         conn.commit()
         conn.close()
+    
+    @classmethod
+    def get_database_for_date(cls, date: str, base_path: str = "data"):
+        """Get database instance for specific date."""
+        return cls(base_path=base_path, date=date)
+    
+    @staticmethod
+    def get_available_dates(base_path: str = "data") -> List[str]:
+        """Get list of available dates with data."""
+        db_dir = os.path.join(base_path, "db")
+        if not os.path.exists(db_dir):
+            return []
+        
+        dates = []
+        for filename in os.listdir(db_dir):
+            if filename.startswith("detections_") and filename.endswith(".db"):
+                date_part = filename[11:-3]  # Remove "detections_" prefix and ".db" suffix
+                dates.append(date_part)
+        
+        return sorted(dates, reverse=True)
+    
+    def get_video_path_for_timestamp(self, timestamp: datetime) -> str:
+        """Get the expected video path for a given timestamp."""
+        date_str = timestamp.strftime("%Y-%m-%d")
+        hour_str = timestamp.strftime("%H")
+        min_str = timestamp.strftime("%M")
+        return os.path.join(self.base_path, "videos", date_str, hour_str, f"{min_str}.mp4")
     
     def save_detection(self, object_type: str, timestamp: datetime, 
                       crop_image: bytes,

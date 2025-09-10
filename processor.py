@@ -10,12 +10,43 @@ import sys
 import os
 from database import DetectionDatabase
 from tqdm import tqdm
+import glob
+
+
+def get_available_models(models_dir: str = "models") -> dict:
+    """Get available YOLO models with descriptions."""
+    model_info = {
+        "yolov8n.pt": "YOLOv8 Nano - Fastest, smallest model (6.2MB)",
+        "yolov8s.pt": "YOLOv8 Small - Good balance of speed and accuracy (21.5MB)",
+        "yolov8m.pt": "YOLOv8 Medium - Better accuracy, slower (49.7MB)",
+        "yolov8l.pt": "YOLOv8 Large - High accuracy, slower processing (83.7MB)",
+        "yolov8x.pt": "YOLOv8 Extra Large - Best accuracy, slowest (131.4MB)",
+        "yolov5n.pt": "YOLOv5 Nano - Legacy fast model",
+        "yolov5s.pt": "YOLOv5 Small - Legacy balanced model",
+        "yolov5m.pt": "YOLOv5 Medium - Legacy medium model",
+        "yolov5l.pt": "YOLOv5 Large - Legacy large model",
+        "yolov5x.pt": "YOLOv5 Extra Large - Legacy best model",
+    }
+    
+    available_models = {}
+    if os.path.exists(models_dir):
+        for model_file in glob.glob(os.path.join(models_dir, "*.pt")):
+            model_name = os.path.basename(model_file)
+            full_path = model_file
+            description = model_info.get(model_name, "Custom YOLO model")
+            available_models[model_name] = {
+                "path": full_path,
+                "description": description
+            }
+    
+    return available_models
 
 
 class VideoParser:
-    def __init__(self, model_path: str = "yolov8n.pt", db_path: str = "detections.db"):
+    def __init__(self, model_path: str = "models/yolov8n.pt", base_path: str = "data"):
         self.model = YOLO(model_path)
-        self.db = DetectionDatabase(db_path)
+        self.base_path = base_path
+        self.db = DetectionDatabase(base_path=base_path)
         
         # Target object classes (COCO dataset class names)
         self.target_classes = {
@@ -44,13 +75,13 @@ class VideoParser:
         self.current_recorded_video_path = None
     
     def _create_video_path(self, timestamp: datetime) -> str:
-        """Create video file path with format videos/date/hour/min.mp4"""
+        """Create video file path with format data/videos/date/hour/min.mp4"""
         date_str = timestamp.strftime("%Y-%m-%d")
         hour_str = timestamp.strftime("%H")
         min_str = timestamp.strftime("%M")
         
-        # Create directory structure
-        video_dir = Path(f"videos/{date_str}/{hour_str}")
+        # Create directory structure under data/videos
+        video_dir = Path(self.base_path) / "videos" / date_str / hour_str
         video_dir.mkdir(parents=True, exist_ok=True)
         
         return str(video_dir / f"{min_str}.mp4")
@@ -62,20 +93,40 @@ class VideoParser:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Use H.264 codec for efficient compression
-        fourcc = cv2.VideoWriter_fourcc(*'H264')
+        # Try different codecs in order of preference
+        codecs_to_try = [
+            ('mp4v', '.mp4'),  # Most compatible
+            ('XVID', '.avi'),  # Very widely supported
+            ('MJPG', '.avi'),  # Fallback option
+            ('avc1', '.mp4'),  # Good for macOS
+        ]
         
-        # Create video writer
-        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        for codec_name, extension in codecs_to_try:
+            try:
+                # Adjust output path extension if needed
+                if not output_path.endswith(extension):
+                    base_path = output_path.rsplit('.', 1)[0]
+                    test_output_path = base_path + extension
+                else:
+                    test_output_path = output_path
+                
+                fourcc = cv2.VideoWriter_fourcc(*codec_name)
+                writer = cv2.VideoWriter(test_output_path, fourcc, fps, (width, height))
+                
+                if writer.isOpened():
+                    print(f"Recording video to: {test_output_path}")
+                    print(f"Video properties: {width}x{height} @ {fps} FPS")
+                    print(f"Using codec: {codec_name}")
+                    return writer
+                else:
+                    writer.release()
+                    
+            except Exception as e:
+                print(f"Codec {codec_name} failed: {e}")
+                continue
         
-        if not writer.isOpened():
-            print(f"Warning: Could not open video writer for {output_path}")
-            return None
-            
-        print(f"Recording video to: {output_path}")
-        print(f"Video properties: {width}x{height} @ {fps} FPS")
-        
-        return writer
+        print(f"Warning: Could not open video writer for {output_path} with any codec")
+        return None
     
     def process_input(self, input_source: str, confidence_threshold: float = 0.5, 
                      is_stream: bool = False, max_seconds: int = None,
@@ -441,13 +492,13 @@ class VideoParser:
 
 def main():
     parser = argparse.ArgumentParser(description='Parse video for object detection')
-    parser.add_argument('input', help='Video file path, webcam index (e.g., 0), or stream URL (e.g., rtsp://...)')
+    parser.add_argument('input', nargs='?', help='Video file path, webcam index (e.g., 0), or stream URL (e.g., rtsp://...)')
     parser.add_argument('--model', default='yolov8n.pt', 
-                       help='YOLOv8 model path (default: yolov8n.pt)')
-    parser.add_argument('--confidence', type=float, default=0.15,
-                       help='Confidence threshold (default: 0.15)')
-    parser.add_argument('--db', default='detections.db',
-                       help='Database path (default: detections.db)')
+                       help='YOLO model name (default: yolov8n.pt). Use --list-models to see available options.')
+    parser.add_argument('--confidence', type=float, default=0.3,
+                       help='Confidence threshold (default: 0.3)')
+    parser.add_argument('--base-path', default='data',
+                       help='Base data path (default: data)')
     parser.add_argument('--stream', action='store_true',
                        help='Force processing as stream (auto-detected for webcam/URLs)')
     parser.add_argument('--max_seconds', type=int, default=None,
@@ -457,12 +508,56 @@ def main():
     parser.add_argument('--show-live', action='store_true',
                        help='Display live video with detections during processing')
     parser.add_argument('--record', action='store_true',
-                       help='Record video files for streams (saved to videos/date/hour/min.mp4)')
+                       help='Record video files for streams (saved to data/videos/date/hour/min.mp4)')
+    parser.add_argument('--list-models', action='store_true',
+                       help='List available YOLO models and exit')
 
     args = parser.parse_args()
     
+    # Handle list models command
+    if args.list_models:
+        available_models = get_available_models()
+        if not available_models:
+            print("No models found in 'models/' directory.")
+            print("\nTo download YOLO models, you can use:")
+            print("  wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.pt -P models/")
+            print("  wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.pt -P models/")
+            print("  wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.pt -P models/")
+            return
+        
+        print("Available YOLO models:")
+        print("=" * 80)
+        for model_name, info in available_models.items():
+            print(f"{model_name:15} - {info['description']}")
+        print("=" * 80)
+        print("\nUsage: python3 processor.py input --model MODEL_NAME")
+        print("Example: python3 processor.py input.mp4 --model yolov8s.pt")
+        return
+    
+    # Require input if not listing models
+    if not args.input:
+        parser.error("input is required unless using --list-models")
+    
+    # Resolve model path
+    model_path = args.model
+    if not os.path.exists(model_path):
+        # Try looking in models directory
+        models_path = os.path.join("models", args.model)
+        if os.path.exists(models_path):
+            model_path = models_path
+        else:
+            available_models = get_available_models()
+            if args.model in available_models:
+                model_path = available_models[args.model]["path"]
+            else:
+                print(f"Error: Model '{args.model}' not found.")
+                print("Use --list-models to see available models.")
+                return
+    
+    print(f"Using model: {model_path}")
+    
     # Initialize video parser
-    parser_obj = VideoParser(model_path=args.model, db_path=args.db)
+    parser_obj = VideoParser(model_path=model_path, base_path=args.base_path)
     
     # Auto-detect input type and process accordingly
     input_str = args.input

@@ -12,13 +12,30 @@ from datetime import datetime
 app = Flask(__name__)
 
 class DetectionViewer:
-    def __init__(self, db_path: str = "detections.db"):
-        self.db = DetectionDatabase(db_path)
-        self.db_path = db_path
+    def __init__(self, base_path: str = "data", date: str = None):
+        """
+        Initialize viewer with day-based database sharding.
+        
+        Args:
+            base_path: Base directory for data storage
+            date: Specific date to view (YYYY-MM-DD format). If None, uses current date.
+        """
+        self.base_path = base_path
+        self.current_date = date
+        if date:
+            self.db = DetectionDatabase.get_database_for_date(date, base_path)
+        else:
+            self.db = DetectionDatabase(base_path=base_path)
+            self.current_date = self.db.date
     
     def _get_connection(self):
         """Get database connection."""
-        return sqlite3.connect(self.db_path)
+        return sqlite3.connect(self.db.db_path)
+    
+    def switch_date(self, date: str):
+        """Switch to a different date's database."""
+        self.current_date = date
+        self.db = DetectionDatabase.get_database_for_date(date, self.base_path)
     
     def get_detections_by_date(self, date_filter=None, object_type_filter=None, 
                               limit=100, offset=0):
@@ -132,8 +149,8 @@ class DetectionViewer:
             }
     
 
-# Initialize viewer
-viewer = DetectionViewer()
+# Initialize viewer (will be updated in main function)
+viewer = None
 
 @app.route('/')
 def index():
@@ -289,10 +306,7 @@ def api_detection_video(detection_id):
     detection_datetime = datetime.fromisoformat(detection_timestamp.replace('Z', '+00:00')) if isinstance(detection_timestamp, str) else detection_timestamp
     
     # Generate the expected video file path based on detection time
-    date_str = detection_datetime.strftime("%Y-%m-%d")
-    hour_str = detection_datetime.strftime("%H")
-    min_str = detection_datetime.strftime("%M")
-    expected_video_path = f"videos/{date_str}/{hour_str}/{min_str}.mp4"
+    expected_video_path = viewer.db.get_video_path_for_timestamp(detection_datetime)
     
     if os.path.exists(expected_video_path):
         video_path = expected_video_path
@@ -360,10 +374,7 @@ def api_detection_video_stream(detection_id):
     detection_datetime = datetime.fromisoformat(detection_timestamp.replace('Z', '+00:00')) if isinstance(detection_timestamp, str) else detection_timestamp
     
     # Generate the expected video file path based on detection time
-    date_str = detection_datetime.strftime("%Y-%m-%d")
-    hour_str = detection_datetime.strftime("%H")
-    min_str = detection_datetime.strftime("%M")
-    expected_video_path = f"videos/{date_str}/{hour_str}/{min_str}.mp4"
+    expected_video_path = viewer.db.get_video_path_for_timestamp(detection_datetime)
     
     if os.path.exists(expected_video_path):
         video_path = expected_video_path
@@ -449,13 +460,40 @@ def api_object_types():
         
         return jsonify(types)
 
+@app.route('/api/available_dates')
+def api_available_dates():
+    """Get list of available dates with data."""
+    dates = DetectionDatabase.get_available_dates(viewer.base_path)
+    return jsonify(dates)
+
+@app.route('/api/current_date')
+def api_current_date():
+    """Get current viewing date."""
+    return jsonify({'date': viewer.current_date})
+
+@app.route('/api/switch_date', methods=['POST'])
+def api_switch_date():
+    """Switch to a different date."""
+    data = request.get_json()
+    if not data or 'date' not in data:
+        return jsonify({'error': 'Date is required'}), 400
+    
+    date = data['date']
+    try:
+        viewer.switch_date(date)
+        return jsonify({'success': True, 'date': date})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 
 
 def main():
     parser = argparse.ArgumentParser(description='Web viewer for detections')
-    parser.add_argument('--db', default='detections.db',
-                       help='Database path (default: detections.db)')
+    parser.add_argument('--base-path', default='data',
+                       help='Base data path (default: data)')
+    parser.add_argument('--date', 
+                       help='Specific date to view (YYYY-MM-DD format)')
     parser.add_argument('--host', default='localhost',
                        help='Host to bind to (default: localhost)')
     parser.add_argument('--port', type=int, default=3000,
@@ -465,12 +503,21 @@ def main():
     
     args = parser.parse_args()
     
-    # Initialize viewer with custom database
+    # Initialize viewer with day-based sharding
     global viewer
-    viewer = DetectionViewer(args.db)
+    viewer = DetectionViewer(base_path=args.base_path, date=args.date)
     
     print(f"Starting detection viewer on http://{args.host}:{args.port}")
-    print(f"Using database: {args.db}")
+    print(f"Using base path: {args.base_path}")
+    print(f"Current date: {viewer.current_date}")
+    print(f"Database: {viewer.db.db_path}")
+    
+    # List available dates
+    available_dates = DetectionDatabase.get_available_dates(args.base_path)
+    if available_dates:
+        print(f"Available dates: {', '.join(available_dates)}")
+    else:
+        print("No existing data found")
     
     app.run(host=args.host, port=args.port, debug=args.debug)
 
