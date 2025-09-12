@@ -36,8 +36,40 @@ class FaceDetector:
         # Initialize face detection using DeepFace
         self.init_face_detector()
         
+        # Load known faces for naming groups
+        self.known_faces = self.load_known_faces()
+        
         # Initialize face database
         self.init_face_database()
+    
+    def load_known_faces(self) -> Dict[str, str]:
+        """Load known faces from data/faces-known/ directory for group naming."""
+        known_faces = {}
+        known_faces_dir = "data/faces-known"
+        
+        if not os.path.exists(known_faces_dir):
+            logger.info(f"Known faces directory not found: {known_faces_dir}")
+            return known_faces
+        
+        try:
+            for person_dir in os.listdir(known_faces_dir):
+                person_path = os.path.join(known_faces_dir, person_dir)
+                if not os.path.isdir(person_path) or person_dir.startswith('.'):
+                    continue
+                
+                # Find the first image file in the person's directory
+                for filename in os.listdir(person_path):
+                    if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
+                        image_path = os.path.join(person_path, filename)
+                        known_faces[person_dir] = image_path
+                        logger.debug(f"Loaded known face: {person_dir} -> {image_path}")
+                        break
+            
+            logger.info(f"Loaded {len(known_faces)} known faces: {list(known_faces.keys())}")
+        except Exception as e:
+            logger.warning(f"Error loading known faces: {e}")
+        
+        return known_faces
     
     def configure_gpu(self):
         """Configure GPU usage for TensorFlow/DeepFace."""
@@ -346,6 +378,59 @@ class FaceDetector:
             logger.debug(f"Face verification failed: {e}")
             return False
     
+    def identify_group_with_known_faces(self, representative_face_id: int) -> str:
+        """Try to identify a face group by matching against known faces."""
+        if not self.known_faces:
+            return None
+        
+        # Get the representative face image from database
+        conn = sqlite3.connect(self.target_db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT face_crop FROM faces WHERE id = ?', (representative_face_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result:
+            return None
+        
+        face_crop_bytes = result[0]
+        
+        # Save the face crop to a temporary file
+        temp_face_path = f"/tmp/temp_face_{representative_face_id}.jpg"
+        try:
+            with open(temp_face_path, 'wb') as f:
+                f.write(face_crop_bytes)
+            
+            # Try to match against each known face
+            for person_name, known_face_path in self.known_faces.items():
+                try:
+                    result = DeepFace.verify(
+                        img1_path=temp_face_path,
+                        img2_path=known_face_path,
+                        model_name=self.model_name,
+                        detector_backend=self.detector_backend,
+                        distance_metric=self.distance_metric,
+                        enforce_detection=False
+                    )
+                    
+                    if result['verified']:
+                        logger.info(f"Face group matched to known person: {person_name} (confidence: {result.get('distance', 'N/A')})")
+                        return person_name
+                except Exception as e:
+                    logger.debug(f"Error matching against {person_name}: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.debug(f"Error in face identification: {e}")
+        finally:
+            # Clean up temporary file
+            try:
+                os.remove(temp_face_path)
+            except:
+                pass
+        
+        return None
+    
     def save_face_groups(self, face_groups: List[List[int]]):
         """Save face groups to database."""
         conn = sqlite3.connect(self.target_db_path)
@@ -369,12 +454,16 @@ class FaceDetector:
             representative_face_id = group_data[0][0]
             avg_confidence = sum(row[1] for row in group_data) / len(group_data)
             
+            # Try to identify the group with known faces
+            identified_name = self.identify_group_with_known_faces(representative_face_id)
+            group_name = identified_name if identified_name else f"Unknown_Group_{group_idx}"
+            
             # Create face group entry
             cursor.execute('''
                 INSERT INTO face_groups 
                 (group_name, representative_face_id, face_count, avg_confidence)
                 VALUES (?, ?, ?, ?)
-            ''', (f"Group_{group_idx}", representative_face_id, len(group_faces), avg_confidence))
+            ''', (group_name, representative_face_id, len(group_faces), avg_confidence))
         
         conn.commit()
         conn.close()

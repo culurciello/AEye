@@ -13,12 +13,17 @@ from tqdm import tqdm
 import glob
 import time
 import threading
+import logging
 
 try:
     import psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def get_available_models(models_dir: str = "models") -> dict:
@@ -129,11 +134,145 @@ class PerformanceMonitor:
         return stats
 
 
+class StreamManager:
+    """Manages stream connections with automatic reconnection and failsafe mechanisms."""
+    
+    def __init__(self, stream_url, max_retries=10, initial_backoff=1.0, max_backoff=60.0, 
+                 connection_timeout=30, read_timeout=30):
+        self.stream_url = stream_url
+        self.max_retries = max_retries
+        self.initial_backoff = initial_backoff
+        self.max_backoff = max_backoff
+        self.connection_timeout = connection_timeout
+        self.read_timeout = read_timeout
+        
+        self.current_cap = None
+        self.retry_count = 0
+        self.last_successful_frame_time = time.time()
+        self.total_reconnections = 0
+        
+    def connect(self):
+        """Establish connection to the stream with retry logic."""
+        for attempt in range(self.max_retries):
+            try:
+                logger.info(f"Attempting to connect to stream: {self.stream_url} (attempt {attempt + 1}/{self.max_retries})")
+                
+                # Create VideoCapture object
+                if isinstance(self.stream_url, int):
+                    cap = cv2.VideoCapture(self.stream_url)
+                else:
+                    cap = cv2.VideoCapture(self.stream_url)
+                
+                # Set timeouts and buffer settings
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if hasattr(cv2, 'CAP_PROP_OPEN_TIMEOUT_MSEC'):
+                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self.connection_timeout * 1000)
+                if hasattr(cv2, 'CAP_PROP_READ_TIMEOUT_MSEC'):
+                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, self.read_timeout * 1000)
+                
+                # Test the connection
+                if cap.isOpened():
+                    # Try to read a test frame
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        logger.info(f"Successfully connected to stream: {self.stream_url}")
+                        self.current_cap = cap
+                        self.retry_count = 0
+                        self.last_successful_frame_time = time.time()
+                        return True
+                    else:
+                        cap.release()
+                        logger.warning(f"Connected but failed to read test frame")
+                else:
+                    cap.release()
+                    logger.warning(f"Failed to open stream connection")
+                
+            except Exception as e:
+                logger.error(f"Connection attempt {attempt + 1} failed: {e}")
+            
+            # Calculate exponential backoff delay
+            if attempt < self.max_retries - 1:
+                backoff_delay = min(self.initial_backoff * (2 ** attempt), self.max_backoff)
+                logger.info(f"Waiting {backoff_delay:.1f} seconds before retry...")
+                time.sleep(backoff_delay)
+        
+        logger.error(f"Failed to connect to stream after {self.max_retries} attempts")
+        return False
+    
+    def read_frame_with_retry(self):
+        """Read a frame with automatic reconnection on failure."""
+        if self.current_cap is None:
+            if not self.connect():
+                return False, None
+        
+        # Try to read frame
+        try:
+            ret, frame = self.current_cap.read()
+            if ret and frame is not None:
+                self.last_successful_frame_time = time.time()
+                return True, frame
+            else:
+                logger.warning("Failed to read frame - stream may have disconnected")
+                return self._handle_read_failure()
+        except Exception as e:
+            logger.error(f"Exception during frame read: {e}")
+            return self._handle_read_failure()
+    
+    def _handle_read_failure(self):
+        """Handle frame read failure with reconnection logic."""
+        # Check if we've been without frames for too long
+        time_since_last_frame = time.time() - self.last_successful_frame_time
+        
+        if time_since_last_frame > self.read_timeout:
+            logger.warning(f"No frames received for {time_since_last_frame:.1f} seconds - attempting reconnection")
+            self.disconnect()
+            self.total_reconnections += 1
+            
+            if self.connect():
+                logger.info(f"Reconnection successful (total reconnections: {self.total_reconnections})")
+                return self.current_cap.read()
+            else:
+                logger.error("Reconnection failed")
+                return False, None
+        else:
+            # Brief pause before trying again
+            time.sleep(0.1)
+            return False, None
+    
+    def disconnect(self):
+        """Disconnect from the stream."""
+        if self.current_cap:
+            self.current_cap.release()
+            self.current_cap = None
+    
+    def is_connected(self):
+        """Check if the stream is currently connected."""
+        return self.current_cap is not None and self.current_cap.isOpened()
+    
+    def get_stats(self):
+        """Get connection statistics."""
+        return {
+            'is_connected': self.is_connected(),
+            'total_reconnections': self.total_reconnections,
+            'time_since_last_frame': time.time() - self.last_successful_frame_time,
+            'retry_count': self.retry_count
+        }
+
+
 class VideoParser:
-    def __init__(self, model_path: str = "models/yolov8n.pt", base_path: str = "data"):
+    def __init__(self, model_path: str = "models/yolov8n.pt", base_path: str = "data",
+                 stream_max_retries: int = 10, stream_timeout: int = 30, stream_backoff: float = 1.0):
         self.model = YOLO(model_path)
         self.base_path = base_path
         self.db = DetectionDatabase(base_path=base_path)
+        
+        # Stream failsafe configuration
+        self.stream_max_retries = stream_max_retries
+        self.stream_timeout = stream_timeout
+        self.stream_backoff = stream_backoff
+        
+        # Performance monitor
+        self.monitor = PerformanceMonitor()
         
         # Target object classes (COCO dataset class names)
         self.target_classes = {
@@ -257,15 +396,36 @@ class VideoParser:
             input_source = int(input_source)
 
         """Process video file or stream and detect objects."""
-        cap = cv2.VideoCapture(input_source)
         
-        if not cap.isOpened():
-            print(f"Error: Could not open {'stream' if is_stream else 'video'} {input_source}")
-            return
+        # Use StreamManager for streams, regular VideoCapture for files
+        stream_manager = None
+        cap = None
         
-        # Set buffer size for streams to reduce latency
         if is_stream:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # Create StreamManager with failsafe configuration
+            stream_manager = StreamManager(
+                input_source, 
+                max_retries=self.stream_max_retries,
+                initial_backoff=self.stream_backoff,
+                max_backoff=60.0,
+                connection_timeout=self.stream_timeout,
+                read_timeout=self.stream_timeout
+            )
+            
+            logger.info(f"Starting stream processing with failsafe (max_retries={self.stream_max_retries}, timeout={self.stream_timeout}s)")
+            
+            if not stream_manager.connect():
+                logger.error(f"Failed to establish initial connection to stream: {input_source}")
+                return
+            
+            # Get the VideoCapture object for video recording setup
+            cap = stream_manager.current_cap
+        else:
+            cap = cv2.VideoCapture(input_source)
+            
+            if not cap.isOpened():
+                logger.error(f"Error: Could not open video file: {input_source}")
+                return
         
         frame_count = 0
         processed_frames = 0
@@ -301,14 +461,26 @@ class VideoParser:
         
         try:
             while True:
-                ret, frame = cap.read()
-                if not ret:
-                    if is_stream:
-                        print("Failed to read frame from stream")
-                        if self.pi_mode:
-                            time.sleep(0.1)  # Brief pause before retry
-                            continue
-                    break
+                # Read frame using appropriate method
+                if is_stream and stream_manager:
+                    ret, frame = stream_manager.read_frame_with_retry()
+                    if not ret:
+                        # StreamManager handles reconnection internally
+                        # Check if we should continue or abort
+                        stream_stats = stream_manager.get_stats()
+                        if not stream_stats['is_connected'] and stream_stats['retry_count'] >= self.stream_max_retries:
+                            logger.error("Stream connection permanently failed - stopping processing")
+                            break
+                        continue
+                else:
+                    ret, frame = cap.read()
+                    if not ret:
+                        if is_stream:
+                            logger.warning("Failed to read frame from stream")
+                            if self.pi_mode:
+                                time.sleep(0.1)  # Brief pause before retry
+                                continue
+                        break
                 
                 frame_count += 1
                 
@@ -360,8 +532,17 @@ class VideoParser:
                     # Show performance stats periodically
                     if last_stats_time and time.time() - last_stats_time > 30:  # Every 30 seconds
                         stats = self.monitor.get_stats()
-                        print(f"📊 Stats: CPU {stats['cpu_percent']:.1f}%, RAM {stats['memory_percent']:.1f}%, "
-                              f"Temp {stats.get('cpu_temp', 'N/A')}°C, Detection: {detection_time*1000:.1f}ms")
+                        stats_msg = f"📊 Stats: CPU {stats['cpu_percent']:.1f}%, RAM {stats['memory_percent']:.1f}%, " \
+                                   f"Temp {stats.get('cpu_temp', 'N/A')}°C, Detection: {detection_time*1000:.1f}ms"
+                        
+                        # Add stream health stats if using stream
+                        if is_stream and stream_manager:
+                            stream_stats = stream_manager.get_stats()
+                            stats_msg += f", Stream: {'Connected' if stream_stats['is_connected'] else 'Disconnected'}"
+                            if stream_stats['total_reconnections'] > 0:
+                                stats_msg += f", Reconnections: {stream_stats['total_reconnections']}"
+                        
+                        logger.info(stats_msg)
                         last_stats_time = time.time()
                 else:
                     results = self.model(frame, conf=confidence_threshold, verbose=False)
@@ -482,7 +663,14 @@ class VideoParser:
                 print("\\nStream processing interrupted by user")
         finally:
             pbar.close()
-            cap.release()
+            
+            # Clean up stream manager or regular capture
+            if stream_manager:
+                stream_manager.disconnect()
+                stream_stats = stream_manager.get_stats()
+                logger.info(f"Stream processing ended - Total reconnections: {stream_stats['total_reconnections']}")
+            elif cap:
+                cap.release()
             
             # Clean up video writer
             if video_writer is not None:
@@ -683,8 +871,22 @@ def main():
                        help='Maximum detections per frame (default: 10)')
     parser.add_argument('--resize-factor', type=float, default=0.75,
                        help='Resize factor for frames (default: 0.75)')
+    
+    # Stream failsafe options
+    parser.add_argument('--stream-max-retries', type=int, default=10,
+                       help='Maximum stream reconnection attempts (default: 10)')
+    parser.add_argument('--stream-timeout', type=int, default=30,
+                       help='Stream connection/read timeout in seconds (default: 30)')
+    parser.add_argument('--stream-backoff', type=float, default=1.0,
+                       help='Initial backoff delay for stream reconnection (default: 1.0)')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO', help='Set logging level (default: INFO)')
 
     args = parser.parse_args()
+    
+    # Set logging level
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    logger.info(f"Logging level set to {args.log_level}")
     
     # Handle list models command
     if args.list_models:
@@ -728,8 +930,22 @@ def main():
     
     print(f"Using model: {model_path}")
     
-    # Initialize video parser
-    parser_obj = VideoParser(model_path=model_path, base_path=args.base_path)
+    # Initialize video parser with stream failsafe configuration
+    parser_obj = VideoParser(
+        model_path=model_path, 
+        base_path=args.base_path,
+        stream_max_retries=args.stream_max_retries,
+        stream_timeout=args.stream_timeout,
+        stream_backoff=args.stream_backoff
+    )
+    
+    # Apply Pi optimizations if enabled
+    if args.pi_mode:
+        parser_obj.set_pi_optimizations(
+            frame_skip=args.frame_skip,
+            max_detections=args.max_detections,
+            resize_factor=args.resize_factor
+        )
     
     # Auto-detect input type and process accordingly
     input_str = args.input
