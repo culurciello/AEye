@@ -58,6 +58,91 @@ python3 web_viewer.py --host 0.0.0.0 --port 3000
 
 Visit http://localhost:3000 to browse detections.
 
+
+## Docker 
+
+### Build and Setup
+
+```bash
+# Build the image
+./docker/docker-run.sh build
+```
+
+### Run Both Services (Recommended)
+
+```bash
+# Run processor + web viewer together in background
+./docker/docker-run.sh both 0 --record --confidence 0.5
+
+# Run with RTSP stream
+./docker/docker-run.sh both rtsp://camera --confidence 0.3
+
+# Check status and manage
+./docker/docker-run.sh status
+./docker/docker-run.sh logs processor
+./docker/docker-run.sh stop all
+```
+
+### Individual Services
+
+```bash
+# Web viewer only
+./docker/docker-run.sh viewer
+
+# Processor only
+./docker/docker-run.sh processor video.mp4 --confidence 0.5
+
+# Debug shell
+./docker/docker-run.sh shell
+```
+
+## Raspberry Pi Optimizations
+
+### Setup and Status
+
+```bash
+# Check Pi system status and get recommendations
+./docker/docker-pi.sh status
+
+# Build Pi-optimized image
+./docker/docker-pi.sh build
+```
+
+### Run Both Services (Recommended for Pi)
+
+```bash
+# Run processor + viewer with Pi optimizations
+./docker/docker-pi.sh both 0 --record --confidence 0.4
+
+# Run with RTSP and performance tuning
+./docker/docker-pi.sh both rtsp://camera --frame-skip 3 --confidence 0.4 --resize-factor 0.5
+
+# Monitor Pi performance
+./docker/docker-pi.sh monitor
+./docker/docker-pi.sh logs processor
+./docker/docker-pi.sh stop all
+```
+
+### Individual Pi Services
+
+```bash
+# Processor only with Pi optimizations
+./docker/docker-pi.sh processor rtsp://camera --frame-skip 3 --confidence 0.4 --resize-factor 0.5
+
+# Web viewer only
+./docker/docker-pi.sh viewer
+```
+
+### Pi Performance Tips
+
+- Use `--frame-skip 2-4` for better performance
+- Set `--confidence 0.4+` to reduce false positives  
+- Use `--resize-factor 0.5-0.75` for faster processing
+- Limit `--max-detections` to 5-10
+- Monitor temperature with `./docker/docker-pi.sh status`
+
+
+
 ## YOLO Model Options
 
 | Model | Size | Speed | Accuracy | Use Case |

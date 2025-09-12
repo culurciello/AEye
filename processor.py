@@ -11,12 +11,20 @@ import os
 from database import DetectionDatabase
 from tqdm import tqdm
 import glob
+import time
+import threading
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 
 def get_available_models(models_dir: str = "models") -> dict:
     """Get available YOLO models with descriptions."""
     model_info = {
-        "yolov8n.pt": "YOLOv8 Nano - Fastest, smallest model (6.2MB)",
+        "yolov8n.pt": "YOLOv8 Nano - Fastest, smallest model (6.2MB) - RECOMMENDED FOR PI",
         "yolov8s.pt": "YOLOv8 Small - Good balance of speed and accuracy (21.5MB)",
         "yolov8m.pt": "YOLOv8 Medium - Better accuracy, slower (49.7MB)",
         "yolov8l.pt": "YOLOv8 Large - High accuracy, slower processing (83.7MB)",
@@ -40,6 +48,85 @@ def get_available_models(models_dir: str = "models") -> dict:
             }
     
     return available_models
+
+
+class PerformanceMonitor:
+    """Monitor system performance and provide warnings."""
+    
+    def __init__(self):
+        self.running = False
+        self.thread = None
+        self.cpu_temps = []
+        self.memory_usage = []
+        
+    def start_monitoring(self):
+        """Start performance monitoring in background thread."""
+        if not PSUTIL_AVAILABLE:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.thread.start()
+        
+    def stop_monitoring(self):
+        """Stop performance monitoring."""
+        self.running = False
+        if self.thread:
+            self.thread.join()
+            
+    def _monitor_loop(self):
+        """Main monitoring loop."""
+        while self.running:
+            try:
+                # Check CPU temperature (Pi-specific)
+                try:
+                    with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+                        temp = int(f.read()) / 1000.0
+                        self.cpu_temps.append(temp)
+                        if temp > 70:
+                            print(f"⚠️  CPU temperature high: {temp:.1f}°C")
+                        elif temp > 80:
+                            print(f"🔥 CPU temperature critical: {temp:.1f}°C - Consider throttling")
+                except:
+                    pass
+                    
+                # Check memory usage
+                if PSUTIL_AVAILABLE:
+                    memory = psutil.virtual_memory()
+                    self.memory_usage.append(memory.percent)
+                    if memory.percent > 85:
+                        print(f"⚠️  Memory usage high: {memory.percent:.1f}%")
+                    elif memory.percent > 95:
+                        print(f"🔴 Memory usage critical: {memory.percent:.1f}%")
+                    
+                # Keep only last 10 readings
+                self.cpu_temps = self.cpu_temps[-10:]
+                self.memory_usage = self.memory_usage[-10:]
+                
+            except Exception as e:
+                pass
+                
+            time.sleep(10)  # Check every 10 seconds
+            
+    def get_stats(self):
+        """Get current performance stats."""
+        stats = {'memory_percent': 0, 'memory_available': 0, 'cpu_percent': 0, 'cpu_temp': None}
+        
+        if PSUTIL_AVAILABLE:
+            memory = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent()
+            stats.update({
+                'memory_percent': memory.percent,
+                'memory_available': memory.available / (1024**3),  # GB
+                'cpu_percent': cpu_percent,
+            })
+        
+        try:
+            with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+                stats['cpu_temp'] = int(f.read()) / 1000.0
+        except:
+            pass
+            
+        return stats
 
 
 class VideoParser:
@@ -73,6 +160,12 @@ class VideoParser:
         
         # Video recording state
         self.current_recorded_video_path = None
+        
+        # Pi optimization settings
+        self.frame_skip = 0  # Process every nth frame
+        self.max_detections_per_frame = 20  # Limit detections to save memory
+        self.resize_factor = 1.0  # Resize frames for faster processing
+        self.pi_mode = False
     
     def _create_video_path(self, timestamp: datetime) -> str:
         """Create video file path with format data/videos/date/hour/min.mp4"""
@@ -86,6 +179,14 @@ class VideoParser:
         
         return str(video_dir / f"{min_str}.mp4")
     
+    def set_pi_optimizations(self, frame_skip=2, max_detections=10, resize_factor=0.75):
+        """Configure Pi-specific optimizations."""
+        self.frame_skip = frame_skip
+        self.max_detections_per_frame = max_detections
+        self.resize_factor = resize_factor
+        self.pi_mode = True
+        print(f"Pi optimizations enabled: skip={frame_skip}, max_det={max_detections}, resize={resize_factor}")
+    
     def _setup_video_writer(self, cap, output_path: str):
         """Setup video writer to record stream without re-encoding"""
         # Get video properties from input
@@ -93,13 +194,22 @@ class VideoParser:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Try different codecs in order of preference
-        codecs_to_try = [
-            ('mp4v', '.mp4'),  # Most compatible
-            ('XVID', '.avi'),  # Very widely supported
-            ('MJPG', '.avi'),  # Fallback option
-            ('avc1', '.mp4'),  # Good for macOS
-        ]
+        # Choose codecs based on Pi mode
+        if self.pi_mode:
+            # Pi-optimized codecs
+            codecs_to_try = [
+                ('MJPG', '.avi'),  # Most compatible on Pi
+                ('mp4v', '.mp4'),
+                ('XVID', '.avi'),
+            ]
+        else:
+            # Standard codecs
+            codecs_to_try = [
+                ('mp4v', '.mp4'),  # Most compatible
+                ('XVID', '.avi'),  # Very widely supported
+                ('MJPG', '.avi'),  # Fallback option
+                ('avc1', '.mp4'),  # Good for macOS
+            ]
         
         for codec_name, extension in codecs_to_try:
             try:
@@ -114,9 +224,12 @@ class VideoParser:
                 writer = cv2.VideoWriter(test_output_path, fourcc, fps, (width, height))
                 
                 if writer.isOpened():
-                    print(f"Recording video to: {test_output_path}")
-                    print(f"Video properties: {width}x{height} @ {fps} FPS")
-                    print(f"Using codec: {codec_name}")
+                    if self.pi_mode:
+                        print(f"Video writer setup: {codec_name} ({width}x{height} @ {fps}fps)")
+                    else:
+                        print(f"Recording video to: {test_output_path}")
+                        print(f"Video properties: {width}x{height} @ {fps} FPS")
+                        print(f"Using codec: {codec_name}")
                     return writer
                 else:
                     writer.release()
@@ -132,6 +245,13 @@ class VideoParser:
                      is_stream: bool = False, max_seconds: int = None,
                      continuous: bool = False, show_live: bool = False, save_tracks: bool = True, record_video: bool = False):
         
+        # Start monitoring if Pi mode is enabled
+        if self.pi_mode:
+            self.monitor.start_monitoring()
+            print(f"🍓 Raspberry Pi optimized processing started")
+            stats = self.monitor.get_stats()
+            print(f"System: CPU {stats['cpu_percent']:.1f}%, RAM {stats['memory_percent']:.1f}%, Temp {stats.get('cpu_temp', 'N/A')}°C")
+        
         # if camera convert to int
         if is_stream and input_source.isdigit():
             input_source = int(input_source)
@@ -143,8 +263,14 @@ class VideoParser:
             print(f"Error: Could not open {'stream' if is_stream else 'video'} {input_source}")
             return
         
+        # Set buffer size for streams to reduce latency
+        if is_stream:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
         frame_count = 0
+        processed_frames = 0
         start_time_processing = datetime.now() if is_stream and max_seconds else None
+        last_stats_time = time.time() if self.pi_mode else None
         
         # Video recording setup
         video_writer = None
@@ -163,7 +289,10 @@ class VideoParser:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             print(f"Processing video: {input_source}")
             print(f"FPS: {fps}, Total frames: {total_frames}")
-            pbar = tqdm(total=total_frames, desc="Processing frames", unit="frame")
+            if self.pi_mode and self.frame_skip > 0:
+                pbar = tqdm(total=total_frames//max(1, self.frame_skip+1), desc="Processing frames", unit="frame")
+            else:
+                pbar = tqdm(total=total_frames, desc="Processing frames", unit="frame")
         else:
             fps = None
             print(f"Processing stream: {input_source}")
@@ -176,7 +305,24 @@ class VideoParser:
                 if not ret:
                     if is_stream:
                         print("Failed to read frame from stream")
+                        if self.pi_mode:
+                            time.sleep(0.1)  # Brief pause before retry
+                            continue
                     break
+                
+                frame_count += 1
+                
+                # Frame skipping for Pi performance
+                if self.pi_mode and self.frame_skip > 0 and frame_count % (self.frame_skip + 1) != 0:
+                    continue
+                    
+                processed_frames += 1
+                
+                # Resize frame for faster processing on Pi
+                if self.pi_mode and self.resize_factor != 1.0:
+                    new_width = int(frame.shape[1] * self.resize_factor)
+                    new_height = int(frame.shape[0] * self.resize_factor)
+                    frame = cv2.resize(frame, (new_width, new_height))
                 
                 # Calculate timestamp
                 if is_stream:
@@ -204,8 +350,21 @@ class VideoParser:
                     if video_writer and video_writer.isOpened():
                         video_writer.write(frame)
                 
-                # Run YOLO detection
-                results = self.model(frame, conf=confidence_threshold, verbose=False)
+                # Run YOLO detection with Pi optimizations
+                if self.pi_mode:
+                    detection_start = time.time()
+                    results = self.model(frame, conf=confidence_threshold, verbose=False, 
+                                       max_det=self.max_detections_per_frame)
+                    detection_time = time.time() - detection_start
+                    
+                    # Show performance stats periodically
+                    if last_stats_time and time.time() - last_stats_time > 30:  # Every 30 seconds
+                        stats = self.monitor.get_stats()
+                        print(f"📊 Stats: CPU {stats['cpu_percent']:.1f}%, RAM {stats['memory_percent']:.1f}%, "
+                              f"Temp {stats.get('cpu_temp', 'N/A')}°C, Detection: {detection_time*1000:.1f}ms")
+                        last_stats_time = time.time()
+                else:
+                    results = self.model(frame, conf=confidence_threshold, verbose=False)
                 
                 # Create a copy for display if showing live
                 display_frame = frame.copy() if show_live else None
@@ -280,8 +439,6 @@ class VideoParser:
                 # Update tracks with current frame detections
                 self._update_tracks(frame_detections, frame_count, save_tracks, show_live)
                 
-                
-                frame_count += 1
                 pbar.update(1)
                 
                 # Show live frame with detections if enabled
@@ -335,6 +492,13 @@ class VideoParser:
             
             if show_live:
                 cv2.destroyAllWindows()
+                
+            if self.pi_mode:
+                self.monitor.stop_monitoring()
+                final_stats = self.monitor.get_stats()
+                print(f"🏁 Final stats: CPU {final_stats['cpu_percent']:.1f}%, "
+                      f"RAM {final_stats['memory_percent']:.1f}%, "
+                      f"Processed {processed_frames} frames")
     
         # Finalize all remaining tracks
         if save_tracks:
@@ -491,7 +655,7 @@ class VideoParser:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Parse video for object detection')
+    parser = argparse.ArgumentParser(description='AEye Video Object Detection - Multi-platform with Pi optimization')
     parser.add_argument('input', nargs='?', help='Video file path, webcam index (e.g., 0), or stream URL (e.g., rtsp://...)')
     parser.add_argument('--model', default='yolov8n.pt', 
                        help='YOLO model name (default: yolov8n.pt). Use --list-models to see available options.')
@@ -511,6 +675,14 @@ def main():
                        help='Record video files for streams (saved to data/videos/date/hour/min.mp4)')
     parser.add_argument('--list-models', action='store_true',
                        help='List available YOLO models and exit')
+    parser.add_argument('--pi-mode', action='store_true',
+                       help='Enable Raspberry Pi optimizations')
+    parser.add_argument('--frame-skip', type=int, default=2,
+                       help='Skip frames for performance (default: 2, process every 3rd frame)')
+    parser.add_argument('--max-detections', type=int, default=10,
+                       help='Maximum detections per frame (default: 10)')
+    parser.add_argument('--resize-factor', type=float, default=0.75,
+                       help='Resize factor for frames (default: 0.75)')
 
     args = parser.parse_args()
     
