@@ -2,6 +2,8 @@
 
 AEye: An AI-powered motion detection system with real-time object recognition, face detection, and interactive web interface.
 
+![](docs/pics/demo.png)
+
 ## Features
 
 - **Motion-Triggered Recording**: Smart video recording with pre/post motion buffers
