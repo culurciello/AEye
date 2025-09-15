@@ -1,8 +1,25 @@
+# Core computer vision and array processing
 opencv-python>=4.8.0
 numpy>=1.21.0
-scikit-learn>=1.2.0
-scikit-image>=0.19.0
-deepface>=0.0.79
-tensorflow>=2.10.0
 pillow>=9.0.0
+
+# Face detection and recognition
+insightface>=0.7.3
+
+# Object detection
+ultralytics>=8.0.0
+
+# Web interface
+flask>=2.3.0
+
+# Data processing and utilities
 tqdm>=4.64.0
+
+# Optional: GPU acceleration (uncomment if using CUDA)
+# onnxruntime-gpu>=1.15.0
+
+# Optional: Additional ML libraries (if needed)
+# scikit-learn>=1.2.0
+# scikit-image>=0.19.0
+# deepface>=0.0.79
+# tensorflow>=2.10.0

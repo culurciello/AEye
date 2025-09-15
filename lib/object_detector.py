@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import logging
 from datetime import datetime
-from typing import Optional
 
 # YOLO object detection
 try:

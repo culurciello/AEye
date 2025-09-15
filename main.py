@@ -10,13 +10,6 @@ import threading
 from collections import deque
 from datetime import datetime, timedelta
 
-# YOLO object detection
-try:
-    from ultralytics import YOLO
-    YOLO_AVAILABLE = True
-except ImportError:
-    YOLO_AVAILABLE = False
-    print("Warning: ultralytics not available. Install with: pip install ultralytics")
 
 # Import our existing motion detection
 from lib.motion_detector import AdaptiveMotionDetector
@@ -40,10 +33,9 @@ class MotionTriggeredProcessor:
                  videos_dir: str = "data/videos",
                  images_dir: str = "data/images",
                  db_path: str = "data/db/detections.db",
-                 base_output_dir: str = "data",
-                 buffer_duration: int = 60,
+                 buffer_duration: int = 120,
                  pre_motion_seconds: int = 30,
-                 post_motion_seconds: int = 30,
+                 post_motion_seconds: int = 60,
                  fps: int = 30,
                  use_gpu: bool = True,
                  image_capture_interval: int = 600):  # 10 minutes in seconds
@@ -52,9 +44,9 @@ class MotionTriggeredProcessor:
 
         Args:
             video_source: Video source (camera index or file path)
-            output_dir: Directory to save video recordings
+            videos_dir: Directory to save video recordings
+            images_dir: Directory to save periodic images
             db_path: Database path for storing detections
-            base_output_dir: Base output directory for derived paths
             buffer_duration: Circular buffer duration in seconds
             pre_motion_seconds: Seconds to save before motion
             post_motion_seconds: Seconds to save after motion
@@ -161,7 +153,6 @@ class MotionTriggeredProcessor:
             
         logger.info("Motion detection warm-up completed")
 
-    
 
     def start_recording(self, trigger_time: datetime) -> str:
         """Start recording a motion-triggered video segment."""

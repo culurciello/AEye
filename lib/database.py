@@ -61,6 +61,8 @@ class DatabaseManager:
                 face_crop BLOB,
                 face_embedding BLOB,
                 confidence REAL,
+                known_person TEXT,
+                recognition_confidence REAL,
                 bbox_x INTEGER,
                 bbox_y INTEGER,
                 bbox_width INTEGER,
@@ -69,6 +71,17 @@ class DatabaseManager:
                 FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
             )
         ''')
+
+        # Add columns to existing face_detections table if they don't exist
+        try:
+            cursor.execute('ALTER TABLE face_detections ADD COLUMN known_person TEXT')
+        except:
+            pass  # Column already exists
+
+        try:
+            cursor.execute('ALTER TABLE face_detections ADD COLUMN recognition_confidence REAL')
+        except:
+            pass  # Column already exists
 
         # Create object detections table
         cursor.execute('''
@@ -121,7 +134,8 @@ class DatabaseManager:
 
     def store_face_detection(self, motion_event_id: int, frame_time: datetime,
                            face_bytes: bytes, embedding: np.ndarray, confidence: float,
-                           x: int, y: int, w: int, h: int) -> int:
+                           x: int, y: int, w: int, h: int, known_person: str = None,
+                           recognition_confidence: float = None) -> int:
         """Store a face detection in the database.
 
         Args:
@@ -131,6 +145,8 @@ class DatabaseManager:
             embedding: Face embedding vector
             confidence: Detection confidence score
             x, y, w, h: Bounding box coordinates
+            known_person: Name of known person if recognized
+            recognition_confidence: Confidence score for recognition
 
         Returns:
             The ID of the created face detection
@@ -143,10 +159,10 @@ class DatabaseManager:
         cursor.execute('''
             INSERT INTO face_detections
             (motion_event_id, frame_timestamp, face_crop, face_embedding, confidence,
-             bbox_x, bbox_y, bbox_width, bbox_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             known_person, recognition_confidence, bbox_x, bbox_y, bbox_width, bbox_height)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (motion_event_id, frame_time, face_bytes, embedding_bytes, confidence,
-              x, y, w, h))
+              known_person, recognition_confidence, x, y, w, h))
 
         face_detection_id = cursor.lastrowid
         conn.commit()
@@ -300,11 +316,28 @@ class DatabaseManager:
         cursor.execute('SELECT AVG(confidence) FROM face_detections')
         avg_confidence = cursor.fetchone()[0] or 0
 
+        # Recognized faces count
+        cursor.execute('SELECT COUNT(*) FROM face_detections WHERE known_person IS NOT NULL')
+        recognized_faces = cursor.fetchone()[0]
+
+        # Count by person
+        cursor.execute('''
+            SELECT known_person, COUNT(*) as count
+            FROM face_detections
+            WHERE known_person IS NOT NULL
+            GROUP BY known_person
+            ORDER BY count DESC
+        ''')
+        person_counts = dict(cursor.fetchall())
+
         conn.close()
 
         return {
             'total_face_detections': total_faces,
-            'avg_confidence': avg_confidence
+            'recognized_faces': recognized_faces,
+            'unknown_faces': total_faces - recognized_faces,
+            'avg_confidence': avg_confidence,
+            'person_counts': person_counts
         }
 
     def get_object_detection_stats(self) -> dict:

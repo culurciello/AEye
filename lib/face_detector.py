@@ -1,17 +1,21 @@
 import cv2
 import numpy as np
 import logging
+import os
+import glob
 from datetime import datetime
-from typing import Optional
 from insightface.app import FaceAnalysis
 
 logger = logging.getLogger(__name__)
 
 class FaceDetector:
-    def __init__(self, use_gpu: bool = True, db_manager=None):
+    def __init__(self, use_gpu: bool = True, db_manager=None, known_faces_dir: str = "data/faces-known"):
         self.use_gpu = use_gpu
         self.db_manager = db_manager
         self.face_app = None
+        self.known_faces_dir = known_faces_dir
+        self.known_face_embeddings = {}
+        self.recognition_threshold = 0.6  # Similarity threshold for face recognition
 
     def init_face_detector(self):
         """Initialize and warm up face detection using InsightFace."""
@@ -36,10 +40,103 @@ class FaceDetector:
                 logger.debug(f"Face detection warm-up iteration {i+1}/3 completed")
     
             logger.info(f"InsightFace initialized and warmed up (ctx_id: {ctx_id})")
-    
+
+            # Load known faces after initializing the face detector
+            self.load_known_faces()
+
         except Exception as e:
             logger.error(f"Failed to initialize face detection: {e}")
             self.face_app = None
+
+    def load_known_faces(self):
+        """Load known faces from the faces-known directory and compute embeddings."""
+        if not self.face_app:
+            logger.warning("Face detector not initialized, cannot load known faces")
+            return
+
+        if not os.path.exists(self.known_faces_dir):
+            logger.warning(f"Known faces directory not found: {self.known_faces_dir}")
+            return
+
+        self.known_face_embeddings = {}
+
+        # Iterate through person directories
+        for person_dir in os.listdir(self.known_faces_dir):
+            person_path = os.path.join(self.known_faces_dir, person_dir)
+
+            if not os.path.isdir(person_path) or person_dir.startswith('.'):
+                continue
+
+            logger.info(f"Loading known faces for: {person_dir}")
+            person_embeddings = []
+
+            # Load all images for this person
+            image_patterns = ['*.jpg', '*.jpeg', '*.png', '*.bmp']
+            for pattern in image_patterns:
+                for image_path in glob.glob(os.path.join(person_path, pattern)):
+                    try:
+                        # Load and process image
+                        image = cv2.imread(image_path)
+                        if image is None:
+                            logger.warning(f"Could not load image: {image_path}")
+                            continue
+
+                        # Detect faces in the image
+                        faces = self.face_app.get(image)
+
+                        if len(faces) == 0:
+                            logger.warning(f"No face detected in: {image_path}")
+                            continue
+                        elif len(faces) > 1:
+                            logger.warning(f"Multiple faces detected in: {image_path}, using the first one")
+
+                        # Use the first (or only) face
+                        face = faces[0]
+                        embedding = face.embedding
+
+                        # Normalize embedding
+                        norm = np.linalg.norm(embedding)
+                        if norm > 0:
+                            embedding = embedding / norm
+                            person_embeddings.append(embedding)
+                            logger.debug(f"Loaded embedding for {person_dir} from {os.path.basename(image_path)}")
+
+                    except Exception as e:
+                        logger.error(f"Error processing {image_path}: {e}")
+
+            if person_embeddings:
+                # Store average embedding for this person
+                self.known_face_embeddings[person_dir] = np.mean(person_embeddings, axis=0)
+                logger.info(f"Loaded {len(person_embeddings)} face(s) for {person_dir}")
+            else:
+                logger.warning(f"No valid faces found for {person_dir}")
+
+        logger.info(f"Loaded known faces for {len(self.known_face_embeddings)} people: {list(self.known_face_embeddings.keys())}")
+
+    def recognize_face(self, embedding: np.ndarray):
+        """Recognize a face by comparing its embedding to known faces.
+
+        Args:
+            embedding: Normalized face embedding
+
+        Returns:
+            Tuple of (person_name, confidence) or (None, 0) if no match
+        """
+        if not self.known_face_embeddings:
+            return None, 0
+
+        best_match = None
+        best_similarity = 0
+
+        for person_name, known_embedding in self.known_face_embeddings.items():
+            # Calculate cosine similarity
+            similarity = np.dot(embedding, known_embedding)
+
+            if similarity > best_similarity and similarity > self.recognition_threshold:
+                best_similarity = similarity
+                best_match = person_name
+
+        return best_match, best_similarity
 
 
 
@@ -82,11 +179,17 @@ class FaceDetector:
                 if norm > 0:
                     embedding = embedding / norm
 
+                # Try to recognize the face
+                known_person, recognition_confidence = self.recognize_face(embedding)
+
+                if known_person:
+                    logger.info(f"Recognized face: {known_person} (confidence: {recognition_confidence:.3f})")
+
                 # Store in database
                 if self.db_manager:
                     self.db_manager.store_face_detection(
                         motion_event_id, frame_time, face_bytes, embedding,
-                        confidence, x1, y1, bbox_w, bbox_h
+                        confidence, x1, y1, bbox_w, bbox_h, known_person, recognition_confidence
                     )
 
                 face_count += 1
@@ -163,11 +266,17 @@ class FaceDetector:
                     if norm > 0:
                         embedding = embedding / norm
 
+                    # Try to recognize the face
+                    known_person, recognition_confidence = self.recognize_face(embedding)
+
+                    if known_person:
+                        logger.info(f"Recognized face: {known_person} (confidence: {recognition_confidence:.3f})")
+
                     # Store in database with full frame coordinates
                     if self.db_manager:
                         self.db_manager.store_face_detection(
                             motion_event_id, frame_time, face_bytes, embedding,
-                            confidence, full_frame_x1, full_frame_y1, bbox_w, bbox_h
+                            confidence, full_frame_x1, full_frame_y1, bbox_w, bbox_h, known_person, recognition_confidence
                         )
 
                     total_face_count += 1
