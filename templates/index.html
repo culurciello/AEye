@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AEye - Detections Viewer</title>
+    <title>AEye - Camera Intelligence</title>
     <style>
         * {
             margin: 0;
@@ -11,250 +11,413 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --primary-color: #667eea;
+            --primary-dark: #4c63d2;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --background: #f8fafc;
+            --surface: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-light: #e5e7eb;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+            --border-radius: 8px;
+        }
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f5f5f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--background);
+            color: var(--text-primary);
             line-height: 1.6;
         }
 
+        body.dark {
+            --background: #0f172a;
+            --surface: #1e293b;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border-light: #334155;
+        }
+
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
             color: white;
-            padding: 1rem 0;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            position: relative;
+            padding: 1.5rem 0;
+            box-shadow: var(--shadow-lg);
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: 0 1.5rem;
         }
 
-        .header h1 {
-            text-align: center;
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .header p {
-            text-align: center;
-            opacity: 0.9;
-        }
-
-        .dark-mode-toggle {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(255,255,255,0.2);
-            border: 2px solid rgba(255,255,255,0.3);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.3s ease;
+        .header-content {
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 8px;
-        }
-
-        .dark-mode-toggle:hover {
-            background: rgba(255,255,255,0.3);
-            transform: scale(1.05);
-        }
-
-        .dark-mode-toggle .icon {
-            font-size: 16px;
-        }
-
-        .controls {
-            background: white;
-            padding: 20px;
-            margin: 20px auto;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            display: flex;
             flex-wrap: wrap;
-            gap: 15px;
-            align-items: center;
+            gap: 1rem;
         }
 
-        .search-group {
+        .header-left h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .header-left p {
+            opacity: 0.9;
+            font-size: 0.95rem;
+        }
+
+        .header-controls {
             display: flex;
+            gap: 1rem;
             align-items: center;
-            gap: 10px;
+            flex-wrap: wrap;
         }
 
-        .search-group label {
-            font-weight: 600;
-            color: #333;
-        }
-
-        .search-group input, .search-group select {
-            padding: 8px 12px;
-            border: 2px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-            transition: border-color 0.3s;
-        }
-
-        .search-group input:focus, .search-group select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .btn {
-            background: #667eea;
+        .date-selector {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
             color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
+            padding: 0.5rem 1rem;
+            border-radius: var(--border-radius);
+            font-size: 0.9rem;
+        }
+
+        .theme-toggle {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: var(--border-radius);
             cursor: pointer;
-            font-size: 14px;
-            transition: background-color 0.3s;
+            transition: all 0.2s;
         }
 
-        .btn:hover {
-            background: #5a6fd8;
+        .theme-toggle:hover {
+            background: rgba(255, 255, 255, 0.3);
         }
 
-        .stats {
-            background: white;
-            padding: 20px;
-            margin: 20px auto;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        .dashboard {
+            padding: 2rem 0;
+        }
+
+        .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
         }
 
         .stat-card {
+            background: var(--surface);
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border-light);
             text-align: center;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 8px;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
 
-        .stat-number {
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .stat-value {
             font-size: 2rem;
-            font-weight: bold;
-            color: #667eea;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
         }
 
         .stat-label {
-            color: #666;
-            margin-top: 5px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
         }
 
-        .detections-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 20px;
-            margin: 20px auto;
-        }
-
-        .detection-card {
-            background: white;
-            border-radius: 10px;
+        .timeline-section {
+            background: var(--surface);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border-light);
             overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            transition: transform 0.3s, box-shadow 0.3s;
+            margin-bottom: 2rem;
+        }
+
+        .timeline-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-light);
+            background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+
+        body.dark .timeline-header {
+            background: linear-gradient(90deg, #1e293b 0%, #334155 100%);
+        }
+
+        .timeline-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .timeline-header p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .timeline-container {
+            padding: 1.5rem;
+            overflow-x: auto;
+        }
+
+        .timeline {
+            display: grid;
+            grid-template-columns: repeat(24, minmax(60px, 1fr));
+            gap: 2px;
+            min-width: 1400px;
+            margin-bottom: 2rem;
+        }
+
+        .hour-block {
+            background: var(--background);
+            border: 2px solid var(--border-light);
+            border-radius: var(--border-radius);
+            padding: 0.75rem 0.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .hour-block:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .hour-block.active {
+            border-color: var(--primary-color);
+            background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+            color: white;
+        }
+
+        .hour-block.has-activity {
+            border-color: var(--success-color);
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(16, 185, 129, 0.2));
+        }
+
+        .hour-block.high-activity {
+            border-color: var(--warning-color);
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.3));
+        }
+
+        .hour-time {
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .hour-count {
+            background: var(--primary-color);
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 0.2rem 0.4rem;
+            border-radius: 12px;
+            margin-top: 0.25rem;
+            min-width: 20px;
+            display: inline-block;
+        }
+
+        .hour-block.active .hour-count {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .events-container {
+            margin-top: 2rem;
+        }
+
+        .events-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--border-light);
+        }
+
+        .events-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .events-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1rem;
+        }
+
+        .event-card {
+            background: var(--surface);
+            border: 1px solid var(--border-light);
+            border-radius: var(--border-radius);
+            padding: 1rem;
+            transition: all 0.2s;
             cursor: pointer;
         }
 
-        .detection-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        .event-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+            border-color: var(--primary-color);
         }
 
-        .detection-image {
-            width: 100%;
-            height: 200px;
-            object-fit: cover;
-            background: #f0f0f0;
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.75rem;
         }
 
-        .detection-info {
-            padding: 15px;
+        .event-time {
+            font-weight: 600;
+            color: var(--primary-color);
+            font-size: 0.9rem;
         }
 
-        .detection-type {
-            display: inline-block;
-            background: #667eea;
+        .event-duration {
+            background: var(--background);
+            color: var(--text-secondary);
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+        }
+
+        .event-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 0.5rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .face-badge {
+            background: var(--success-color);
             color: white;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            margin-bottom: 10px;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-right: 0.25rem;
         }
 
-        .detection-time {
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 8px;
+        .object-badge {
+            background: var(--warning-color);
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 500;
         }
 
-        .detection-confidence {
-            color: #28a745;
-            font-weight: 600;
-            font-size: 14px;
+        .processed-badge {
+            background: var(--primary-color);
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.7rem;
         }
 
-        .detection-caption {
-            margin-top: 10px;
-            font-size: 13px;
-            color: #555;
-            line-height: 1.4;
+        .unprocessed-badge {
+            background: var(--text-secondary);
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.7rem;
+        }
+
+        .object-detections-preview {
+            margin: 0.75rem 0;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .object-class-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 0.25rem 0.5rem 0.25rem 0;
+            padding: 0.3rem 0.5rem;
+            background: var(--background);
+            border-radius: 6px;
+            border: 1px solid var(--border-light);
+        }
+
+        .object-thumbnail {
+            width: 32px;
+            height: 32px;
+            border-radius: 4px;
+            object-fit: cover;
+            border: 1px solid var(--border-light);
+        }
+
+        .object-class-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-primary);
         }
 
         .loading {
             text-align: center;
-            padding: 40px;
-            color: #666;
+            padding: 3rem;
+            color: var(--text-secondary);
         }
 
-        .no-results {
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-light);
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .empty-state {
             text-align: center;
-            padding: 60px 20px;
-            color: #666;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
         }
 
-        .no-results h3 {
-            margin-bottom: 10px;
-        }
-
-        .pagination {
-            display: flex;
-            justify-content: center;
-            gap: 10px;
-            margin: 30px 0;
-        }
-
-        .page-btn {
-            background: white;
-            border: 2px solid #ddd;
-            padding: 8px 16px;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .page-btn:hover, .page-btn.active {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-
-        .page-btn:disabled {
+        .empty-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
             opacity: 0.5;
-            cursor: not-allowed;
         }
 
-        /* Modal Styles */
         .modal {
             display: none;
             position: fixed;
@@ -262,269 +425,77 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0, 0, 0, 0.5);
             z-index: 1000;
+            backdrop-filter: blur(4px);
         }
 
         .modal-content {
             position: relative;
-            background: white;
-            margin: 5% auto;
-            padding: 0;
-            width: 90%;
+            background: var(--surface);
+            margin: 2rem auto;
             max-width: 800px;
-            border-radius: 10px;
+            max-height: 90vh;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow-lg);
             overflow: hidden;
         }
 
         .modal-header {
-            background: #667eea;
-            color: white;
-            padding: 20px;
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-light);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
         .modal-close {
             background: none;
             border: none;
-            color: white;
-            font-size: 24px;
+            font-size: 1.5rem;
             cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 50%;
+            transition: background-color 0.2s;
+        }
+
+        .modal-close:hover {
+            background: var(--background);
         }
 
         .modal-body {
-            padding: 20px;
-        }
-
-        .video-container {
-            width: 100%;
-            margin-bottom: 20px;
-            position: relative;
-        }
-
-        .video-container video {
-            width: 100%;
-            max-height: 400px;
-        }
-
-        .detection-overlay {
-            position: absolute;
-            border: 3px solid #ff4444;
-            background: rgba(255, 68, 68, 0.1);
-            pointer-events: none;
-            display: none;
-            z-index: 10;
-        }
-
-        .detection-overlay::after {
-            content: attr(data-label);
-            position: absolute;
-            top: -25px;
-            left: 0;
-            background: #ff4444;
-            color: white;
-            padding: 2px 8px;
-            font-size: 12px;
-            border-radius: 3px;
-            white-space: nowrap;
-        }
-
-        .detection-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-        }
-
-        .detail-item {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 5px;
-        }
-
-        .detail-label {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 5px;
-        }
-
-        .detail-value {
-            color: #666;
-        }
-
-        .suggestion-btn {
-            background: #f8f9fa;
-            border: 1px solid #ddd;
-            padding: 4px 8px;
-            border-radius: 15px;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .suggestion-btn:hover {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-
-        .search-result-info {
-            background: #e8f4fd;
-            border: 1px solid #b8d4ed;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 20px auto;
-            color: #2c5282;
-        }
-
-        .similarity-score {
-            background: linear-gradient(90deg, #48bb78, #38a169);
-            color: white;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-left: 8px;
-        }
-
-        /* Dark Mode Styles */
-        body.dark-mode {
-            background-color: #121212;
-            color: #e0e0e0;
-        }
-
-        body.dark-mode .controls {
-            background: #1e1e1e;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-
-        body.dark-mode .search-group label {
-            color: #e0e0e0;
-        }
-
-        body.dark-mode .search-group input,
-        body.dark-mode .search-group select {
-            background: #2a2a2a;
-            border-color: #444;
-            color: #e0e0e0;
-        }
-
-        body.dark-mode .search-group input:focus,
-        body.dark-mode .search-group select:focus {
-            border-color: #667eea;
-        }
-
-        body.dark-mode .stats {
-            background: #1e1e1e;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-
-        body.dark-mode .stat-card {
-            background: #2a2a2a;
-        }
-
-        body.dark-mode .stat-label {
-            color: #b0b0b0;
-        }
-
-        body.dark-mode .detection-card {
-            background: #1e1e1e;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        }
-
-        body.dark-mode .detection-card:hover {
-            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-        }
-
-        body.dark-mode .detection-time {
-            color: #b0b0b0;
-        }
-
-        body.dark-mode .detection-caption {
-            color: #c0c0c0;
-        }
-
-        body.dark-mode .modal-content {
-            background: #1e1e1e;
-        }
-
-        body.dark-mode .modal-body {
-            background: #1e1e1e;
-        }
-
-        body.dark-mode .detail-item {
-            background: #2a2a2a;
-        }
-
-        body.dark-mode .detail-label {
-            color: #e0e0e0;
-        }
-
-        body.dark-mode .detail-value {
-            color: #b0b0b0;
-        }
-
-        body.dark-mode .page-btn {
-            background: #2a2a2a;
-            border-color: #444;
-            color: #e0e0e0;
-        }
-
-        body.dark-mode .page-btn:hover {
-            background: #667eea;
-            border-color: #667eea;
-        }
-
-        body.dark-mode .suggestion-btn {
-            background: #2a2a2a;
-            border-color: #444;
-            color: #e0e0e0;
-        }
-
-        body.dark-mode .suggestion-btn:hover {
-            background: #667eea;
-            border-color: #667eea;
-        }
-
-        body.dark-mode .search-result-info {
-            background: #1a2332;
-            border-color: #2d4a66;
-            color: #a8c8ec;
-        }
-
-        body.dark-mode .loading,
-        body.dark-mode .no-results {
-            color: #b0b0b0;
-        }
-
-        body.dark-mode .error {
-            color: #ff6b6b;
+            padding: 1.5rem;
+            max-height: 60vh;
+            overflow-y: auto;
         }
 
         @media (max-width: 768px) {
-            .controls {
+            .header-content {
                 flex-direction: column;
-                align-items: stretch;
+                text-align: center;
             }
 
-            .search-group {
-                flex-direction: column;
-                align-items: stretch;
+            .timeline {
+                grid-template-columns: repeat(12, minmax(80px, 1fr));
+                gap: 4px;
             }
 
-            .detections-grid {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 1rem;
+            }
+
+            .events-grid {
                 grid-template-columns: 1fr;
             }
 
-            .header h1 {
-                font-size: 2rem;
-            }
-
-            .dark-mode-toggle {
-                position: static;
-                margin: 10px auto 0;
-                width: fit-content;
+            .container {
+                padding: 0 1rem;
             }
         }
     </style>
@@ -532,250 +503,368 @@
 <body>
     <div class="header">
         <div class="container">
-            <h1>AEye</h1>
-            <p>Security Camera Detection Viewer</p>
+            <div class="header-content">
+                <div class="header-left">
+                    <h1>AEye Camera Intelligence</h1>
+                    <p>Interactive Timeline Dashboard</p>
+                </div>
+                <div class="header-controls">
+                    <select class="date-selector" id="dateSelector">
+                        <option value="">Loading dates...</option>
+                    </select>
+                    <button class="theme-toggle" onclick="toggleTheme()">
+                        🌙 Dark Mode
+                    </button>
+                </div>
+            </div>
         </div>
-        <button class="dark-mode-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">
-            <span class="icon" id="darkModeIcon">🌙</span>
-            <span id="darkModeText">Dark</span>
-        </button>
     </div>
 
     <div class="container">
-        <!-- Semantic Search -->
-        <div class="controls">
-            <div style="width: 100%; margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #333;">AI Search (Natural Language):</label>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <input type="text" id="semanticQuery" placeholder="e.g., 'Find all red cars' or 'Show me people with backpacks'" 
-                           style="flex: 1; padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px; font-size: 14px;">
-                    <button class="btn" onclick="performSemanticSearch()">AI Search</button>
-                    <button class="btn" onclick="indexCaptions()" style="background: #28a745;">Index Captions</button>
+        <div class="dashboard">
+            <!-- Stats Grid -->
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalEvents">-</div>
+                    <div class="stat-label">Total Events</div>
                 </div>
-                <div id="searchSuggestions" style="margin-top: 8px; display: none;">
-                    <small style="color: #666;">Suggestions:</small>
-                    <div id="suggestionsList" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px;"></div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalFaces">-</div>
+                    <div class="stat-label">Face Detections</div>
                 </div>
-                <div id="searchStatus" style="margin-top: 8px; color: #666; font-size: 14px;"></div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalObjects">-</div>
+                    <div class="stat-label">Object Detections</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="processedEvents">-</div>
+                    <div class="stat-label">Processed Events</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="peakHour">-</div>
+                    <div class="stat-label">Peak Hour</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="avgConfidence">-</div>
+                    <div class="stat-label">Avg Confidence</div>
+                </div>
             </div>
-        </div>
 
-        <!-- Traditional Filters -->
-        <div class="controls">
-            <div class="search-group">
-                <label>Object Type:</label>
-                <select id="objectTypeFilter">
-                    <option value="">All Types</option>
-                </select>
+            <!-- Timeline Section -->
+            <div class="timeline-section">
+                <div class="timeline-header">
+                    <h2>Activity Timeline</h2>
+                    <p>Click on any hour to view detailed events for that time period</p>
+                </div>
+                <div class="timeline-container">
+                    <div class="loading" id="timelineLoading">
+                        <div class="spinner"></div>
+                        <p>Loading activity timeline...</p>
+                    </div>
+                    <div class="timeline" id="timeline" style="display: none;"></div>
+                </div>
             </div>
-            <div class="search-group">
-                <label>Date:</label>
-                <input type="date" id="dateFilter">
-            </div>
-            <div class="search-group">
-                <button class="btn" onclick="loadDetections()">Filter</button>
-                <button class="btn" onclick="clearFilters()">Clear</button>
-            </div>
-        </div>
 
-        <!-- Statistics -->
-        <div class="stats" id="statsContainer">
-            <div class="stat-card">
-                <div class="stat-number" id="totalCount">-</div>
-                <div class="stat-label">Total Tracks</div>
+            <!-- Events Container -->
+            <div class="events-container" id="eventsContainer" style="display: none;">
+                <div class="events-header">
+                    <div class="events-title" id="eventsTitle">Events</div>
+                </div>
+                <div class="events-grid" id="eventsGrid"></div>
             </div>
-        </div>
 
-        <!-- Tracks Grid -->
-        <div id="detectionsContainer">
-            <div class="loading">Loading tracks...</div>
-        </div>
-
-        <!-- Pagination -->
-        <div class="pagination" id="pagination" style="display: none;">
-            <button class="page-btn" onclick="changePage(-1)">Previous</button>
-            <span id="pageInfo">Page 1</span>
-            <button class="page-btn" onclick="changePage(1)">Next</button>
+            <!-- Empty State -->
+            <div class="empty-state" id="emptyState" style="display: none;">
+                <div class="empty-icon">📅</div>
+                <h3>No events found for this date</h3>
+                <p>Try selecting a different date from the dropdown above</p>
+            </div>
         </div>
     </div>
 
-    <!-- Modal -->
-    <div class="modal" id="detectionModal">
+    <!-- Event Detail Modal -->
+    <div class="modal" id="eventModal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Track Details</h3>
+                <div class="modal-title" id="modalTitle">Event Details</div>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
-            <div class="modal-body">
-                <div class="video-container" id="videoContainer">
-                    <p>Video playback would be implemented here</p>
-                </div>
-                <div class="detection-details" id="detectionDetails">
-                </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Event details will be loaded here -->
             </div>
         </div>
     </div>
 
     <script>
-        let currentPage = 1;
-        const detectionsPerPage = 20;
-        let currentFilters = {};
-        let totalPages = 1;
+        let currentDate = null;
+        let currentHour = null;
+        let timelineData = {};
 
-        let isSemanticSearch = false;
-        let currentSearchQuery = '';
-
-        // Initialize page
+        // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
-            loadObjectTypes();
+            // Load theme preference
+            if (localStorage.getItem('darkMode') === 'true') {
+                document.body.classList.add('dark');
+                updateThemeToggle();
+            }
+
+            loadAvailableDates();
             loadStats();
-            loadDetections();
-            loadSearchSuggestions();
-            initializeDarkMode();
-            
-            // Add enter key support for semantic search
-            document.getElementById('semanticQuery').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    performSemanticSearch();
-                }
-            });
         });
 
-        async function loadObjectTypes() {
+        function toggleTheme() {
+            document.body.classList.toggle('dark');
+            const isDark = document.body.classList.contains('dark');
+            localStorage.setItem('darkMode', isDark);
+            updateThemeToggle();
+        }
+
+        function updateThemeToggle() {
+            const toggle = document.querySelector('.theme-toggle');
+            const isDark = document.body.classList.contains('dark');
+            toggle.innerHTML = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
+        }
+
+        async function loadAvailableDates() {
             try {
-                const response = await fetch('/api/object_types');
-                const types = await response.json();
-                
-                const select = document.getElementById('objectTypeFilter');
-                types.forEach(type => {
+                const response = await fetch('/api/available_dates');
+                const dates = await response.json();
+
+                const selector = document.getElementById('dateSelector');
+                selector.innerHTML = '';
+
+                if (dates.length === 0) {
+                    selector.innerHTML = '<option value="">No data available</option>';
+                    return;
+                }
+
+                dates.forEach(date => {
                     const option = document.createElement('option');
-                    option.value = type;
-                    option.textContent = type.charAt(0).toUpperCase() + type.slice(1);
-                    select.appendChild(option);
+                    option.value = date;
+                    option.textContent = new Date(date).toLocaleDateString();
+                    selector.appendChild(option);
                 });
+
+                // Select the most recent date
+                selector.value = dates[0];
+                currentDate = dates[0];
+
+                // Add change listener
+                selector.addEventListener('change', (e) => {
+                    currentDate = e.target.value;
+                    loadTimelineData();
+                    hideEvents();
+                });
+
+                loadTimelineData();
+
             } catch (error) {
-                console.error('Error loading object types:', error);
+                console.error('Error loading dates:', error);
             }
         }
 
         async function loadStats() {
             try {
-                const response = await fetch('/api/stats');
-                const stats = await response.json();
-                
-                // Use track statistics if available, otherwise detection statistics
-                const hasTracksData = stats.total_tracks > 0;
-                const totalCount = hasTracksData ? stats.total_tracks : stats.total_count;
-                const label = hasTracksData ? 'Total Tracks' : 'Total Detections';
-                
-                document.getElementById('totalCount').textContent = totalCount;
-                document.querySelector('#statsContainer .stat-label').textContent = label;
-                
-                // Calculate total pages
-                totalPages = Math.ceil(totalCount / detectionsPerPage);
-                
-                // Create additional stat cards
-                const statsContainer = document.getElementById('statsContainer');
-                const counts = hasTracksData ? stats.track_counts : stats.object_counts;
-                const countLabel = hasTracksData ? 'Tracks' : 'Detections';
-                
-                counts.slice(0, 4).forEach(([type, count]) => {
-                    const statCard = document.createElement('div');
-                    statCard.className = 'stat-card';
-                    statCard.innerHTML = `
-                        <div class="stat-number">${count}</div>
-                        <div class="stat-label">${type.charAt(0).toUpperCase() + type.slice(1)} ${countLabel}</div>
-                    `;
-                    statsContainer.appendChild(statCard);
-                });
+                const [motionResponse, faceResponse, objectResponse] = await Promise.all([
+                    fetch('/api/stats'),
+                    fetch('/api/face_stats'),
+                    fetch('/api/object_stats')
+                ]);
+
+                const motionStats = await motionResponse.json();
+                const faceStats = await faceResponse.json();
+                const objectStats = await objectResponse.json();
+
+                document.getElementById('totalEvents').textContent = motionStats.total_motion_events;
+                document.getElementById('totalFaces').textContent = faceStats.total_face_detections;
+                document.getElementById('totalObjects').textContent = objectStats.total_object_detections;
+                document.getElementById('processedEvents').textContent = motionStats.processed_events;
+                document.getElementById('avgConfidence').textContent =
+                    (faceStats.avg_confidence * 100).toFixed(1) + '%';
+
+                // Calculate peak hour from timeline data if available
+                if (Object.keys(timelineData).length > 0) {
+                    const peakHour = Object.entries(timelineData)
+                        .sort(([,a], [,b]) => b.length - a.length)[0];
+                    document.getElementById('peakHour').textContent =
+                        peakHour ? formatHour(peakHour[0]) : 'N/A';
+                }
+
             } catch (error) {
                 console.error('Error loading stats:', error);
             }
         }
 
-        async function loadDetections() {
-            const container = document.getElementById('detectionsContainer');
-            
-            // Check if we should load tracks or detections
-            const statsResponse = await fetch('/api/stats');
-            const stats = await statsResponse.json();
-            const useTrackData = stats.total_tracks > 0;
-            
-            container.innerHTML = `<div class="loading">Loading ${useTrackData ? 'tracks' : 'detections'}...</div>`;
+        async function loadTimelineData() {
+            if (!currentDate) return;
+
+            document.getElementById('timelineLoading').style.display = 'block';
+            document.getElementById('timeline').style.display = 'none';
+            document.getElementById('emptyState').style.display = 'none';
 
             try {
-                // Get current filters
-                const objectType = document.getElementById('objectTypeFilter').value;
-                const date = document.getElementById('dateFilter').value;
+                const response = await fetch(`/api/hourly_activity?date=${currentDate}`);
+                const data = await response.json();
 
-                currentFilters = { objectType, date };
+                timelineData = data;
+                renderTimeline();
 
-                // Build query parameters
-                const params = new URLSearchParams({
-                    limit: detectionsPerPage,
-                    offset: (currentPage - 1) * detectionsPerPage
-                });
-
-                if (objectType) params.append('type', objectType);
-                if (date) params.append('date', date);
-
-                const endpoint = useTrackData ? '/api/tracks' : '/api/detections';
-                const response = await fetch(`${endpoint}?${params}`);
-                const items = await response.json();
-
-                if (items.length === 0) {
-                    container.innerHTML = `
-                        <div class="no-results">
-                            <h3>No ${useTrackData ? 'tracks' : 'detections'} found</h3>
-                            <p>Try adjusting your search filters</p>
-                        </div>
-                    `;
-                    document.getElementById('pagination').style.display = 'none';
-                    return;
+                // Update peak hour in stats
+                if (Object.keys(data).length > 0) {
+                    const peakHour = Object.entries(data)
+                        .sort(([,a], [,b]) => b.length - a.length)[0];
+                    document.getElementById('peakHour').textContent =
+                        peakHour ? formatHour(peakHour[0]) : 'N/A';
+                } else {
+                    document.getElementById('emptyState').style.display = 'block';
                 }
 
-                // Create grid
-                const grid = document.createElement('div');
-                grid.className = 'detections-grid';
-
-                items.forEach(item => {
-                    const card = useTrackData ? createTrackCard(item) : createDetectionCard(item);
-                    grid.appendChild(card);
-                });
-
-                container.innerHTML = '';
-                container.appendChild(grid);
-
-                // Show pagination
-                document.getElementById('pagination').style.display = 'flex';
-                document.getElementById('pageInfo').textContent = `Page ${currentPage}/${totalPages}`;
-
             } catch (error) {
-                console.error(`Error loading ${useTrackData ? 'tracks' : 'detections'}:`, error);
-                container.innerHTML = `<div class="no-results"><h3>Error loading ${useTrackData ? 'tracks' : 'detections'}</h3></div>`;
+                console.error('Error loading timeline data:', error);
+            } finally {
+                document.getElementById('timelineLoading').style.display = 'none';
             }
         }
 
-        function createTrackCard(track) {
-            const card = document.createElement('div');
-            card.className = 'detection-card';
-            card.onclick = () => showTrackModal(track);
+        function renderTimeline() {
+            const timeline = document.getElementById('timeline');
+            timeline.innerHTML = '';
+            timeline.style.display = 'grid';
 
-            const imageUrl = `/api/track/${track.id}/image`;
-            const startTime = new Date(track.start_time).toLocaleString();
-            const endTime = new Date(track.end_time).toLocaleString();
-            const confidence = (track.avg_confidence * 100).toFixed(1);
-            const duration = track.end_frame - track.start_frame + 1;
+            // Create 24 hour blocks
+            for (let hour = 0; hour < 24; hour++) {
+                const hourStr = hour.toString().padStart(2, '0');
+                const events = timelineData[hourStr] || [];
+                const eventCount = events.length;
+
+                const hourBlock = document.createElement('div');
+                hourBlock.className = 'hour-block';
+                hourBlock.onclick = () => selectHour(hourStr);
+
+                // Add activity classes
+                if (eventCount > 0) {
+                    hourBlock.classList.add('has-activity');
+                    if (eventCount >= 5) {
+                        hourBlock.classList.add('high-activity');
+                    }
+                }
+
+                hourBlock.innerHTML = `
+                    <div class="hour-time">${formatHour(hourStr)}</div>
+                    ${eventCount > 0 ? `<div class="hour-count">${eventCount}</div>` : ''}
+                `;
+
+                timeline.appendChild(hourBlock);
+            }
+        }
+
+        function selectHour(hour) {
+            currentHour = hour;
+
+            // Update active hour
+            document.querySelectorAll('.hour-block').forEach((block, index) => {
+                block.classList.remove('active');
+                if (index === parseInt(hour)) {
+                    block.classList.add('active');
+                }
+            });
+
+            // Load and show events for this hour
+            loadHourEvents(hour);
+        }
+
+        async function loadHourEvents(hour) {
+            const events = timelineData[hour] || [];
+
+            if (events.length === 0) {
+                hideEvents();
+                return;
+            }
+
+            const container = document.getElementById('eventsContainer');
+            const grid = document.getElementById('eventsGrid');
+            const title = document.getElementById('eventsTitle');
+
+            title.textContent = `Events at ${formatHour(hour)} (${events.length})`;
+            container.style.display = 'block';
+
+            grid.innerHTML = '';
+
+            // Load detailed event data
+            for (const eventId of events) {
+                try {
+                    const response = await fetch(`/api/motion_event/${eventId}`);
+                    const event = await response.json();
+
+                    const eventCard = createEventCard(event);
+                    grid.appendChild(eventCard);
+                } catch (error) {
+                    console.error('Error loading event:', eventId, error);
+                }
+            }
+        }
+
+        function createEventCard(event) {
+            const card = document.createElement('div');
+            card.className = 'event-card';
+            card.onclick = () => showEventDetails(event.id);
+
+            const startTime = new Date(event.start_time);
+            const duration = parseFloat(event.duration_seconds);
+
+            // Build object classes display
+            let objectsDisplay = '';
+            if (event.object_detections && event.object_detections.length > 0) {
+                const objectClasses = {};
+                event.object_detections.forEach(od => {
+                    if (!objectClasses[od.class_name]) {
+                        objectClasses[od.class_name] = [];
+                    }
+                    objectClasses[od.class_name].push(od);
+                });
+
+                objectsDisplay = Object.entries(objectClasses).map(([className, detections]) => {
+                    const firstDetection = detections[0];
+                    return `
+                        <div class="object-class-item">
+                            <img src="/api/object_detection/${firstDetection.id}/image"
+                                 class="object-thumbnail"
+                                 alt="${className}"
+                                 onerror="this.style.display='none'">
+                            <span class="object-class-label">${className} (${detections.length})</span>
+                        </div>
+                    `;
+                }).join('');
+            }
 
             card.innerHTML = `
-                <img src="${imageUrl}" alt="${track.object_type}" class="detection-image" 
-                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5JbWFnZSBOb3QgRm91bmQ8L3RleHQ+PC9zdmc+'">
-                <div class="detection-info">
-                    <span class="detection-type">${track.object_type}</span>
-                    <div class="detection-time">Started: ${startTime}</div>
-                    <div class="detection-confidence">Avg Confidence: ${confidence}%</div>
-                    <div style="font-size: 12px; color: #666; margin-top: 4px;">
-                        Duration: ${duration} frames (${track.detection_count} detections)
+                <div class="event-header">
+                    <div class="event-time">${startTime.toLocaleTimeString()}</div>
+                    <div class="event-duration">${duration.toFixed(1)}s</div>
+                </div>
+
+                ${objectsDisplay ? `
+                    <div class="object-detections-preview">
+                        ${objectsDisplay}
+                    </div>
+                ` : ''}
+
+                <div class="event-info">
+                    <div>
+                        ${event.face_count > 0 ?
+                            `<span class="face-badge">${event.face_count} faces</span>` :
+                            '<span style="color: var(--text-secondary);">No faces</span>'
+                        }
+                        ${event.object_count > 0 ?
+                            `<span class="object-badge">${event.object_count} objects</span>` :
+                            ''
+                        }
+                    </div>
+                    <div>
+                        ${event.processed ?
+                            '<span class="processed-badge">Processed</span>' :
+                            '<span class="unprocessed-badge">Pending</span>'
+                        }
                     </div>
                 </div>
             `;
@@ -783,509 +872,99 @@
             return card;
         }
 
-        function createDetectionCard(detection) {
-            const card = document.createElement('div');
-            card.className = 'detection-card';
-            card.onclick = () => showDetectionModal(detection);
-
-            const imageUrl = `/api/detection/${detection.id}/image`;
-            const datetime = new Date(detection.time).toLocaleString();
-            const confidence = (detection.confidence * 100).toFixed(1);
-
-            card.innerHTML = `
-                <img src="${imageUrl}" alt="${detection.object_type}" class="detection-image" 
-                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5JbWFnZSBOb3QgRm91bmQ8L3RleHQ+PC9zdmc+'">
-                <div class="detection-info">
-                    <span class="detection-type">${detection.object_type}</span>
-                    <div class="detection-time">${datetime}</div>
-                    <div class="detection-confidence">Confidence: ${confidence}%</div>
-                    ${detection.caption ? `<div class="detection-caption">${detection.caption}</div>` : ''}
-                </div>
-            `;
-
-            return card;
-        }
-
-        function showTrackModal(track) {
-            document.getElementById('detectionModal').style.display = 'block';
-            
-            const detailsContainer = document.getElementById('detectionDetails');
-            const startTime = new Date(track.start_time).toLocaleString();
-            const endTime = new Date(track.end_time).toLocaleString();
-            const confidence = (track.avg_confidence * 100).toFixed(1);
-            const duration = track.end_frame - track.start_frame + 1;
-
-            detailsContainer.innerHTML = `
-                <div class="detail-item">
-                    <div class="detail-label">Object Type</div>
-                    <div class="detail-value">${track.object_type}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Start Time</div>
-                    <div class="detail-value">${startTime}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">End Time</div>
-                    <div class="detail-value">${endTime}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Average Confidence</div>
-                    <div class="detail-value">${confidence}%</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Frame Range</div>
-                    <div class="detail-value">${track.start_frame} - ${track.end_frame}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Duration</div>
-                    <div class="detail-value">${duration} frames</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Detection Count</div>
-                    <div class="detail-value">${track.detection_count} detections</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Video Source</div>
-                    <div class="detail-value">${track.original_video_link}</div>
-                </div>
-            `;
-
-            // Load video information using the best detection ID
-            if (track.best_crop_detection_id) {
-                loadVideoInfo(track.best_crop_detection_id);
-            }
-        }
-
-        function showDetectionModal(detection) {
-            document.getElementById('detectionModal').style.display = 'block';
-            
-            const detailsContainer = document.getElementById('detectionDetails');
-            const datetime = new Date(detection.time).toLocaleString();
-            const confidence = (detection.confidence * 100).toFixed(1);
-
-            detailsContainer.innerHTML = `
-                <div class="detail-item">
-                    <div class="detail-label">Object Type</div>
-                    <div class="detail-value">${detection.object_type}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Detection Time</div>
-                    <div class="detail-value">${datetime}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Confidence</div>
-                    <div class="detail-value">${confidence}%</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Frame Number</div>
-                    <div class="detail-value">${detection.frame_num}</div>
-                </div>
-                <div class="detail-item">
-                    <div class="detail-label">Video Source</div>
-                    <div class="detail-value">${detection.original_video_link}</div>
-                </div>
-                ${detection.caption ? `
-                <div class="detail-item" style="grid-column: 1 / -1;">
-                    <div class="detail-label">Caption</div>
-                    <div class="detail-value">${detection.caption}</div>
-                </div>` : ''}
-            `;
-
-            // Load video information
-            loadVideoInfo(detection.id);
-        }
-
-        async function loadVideoInfo(detectionId) {
+        async function showEventDetails(eventId) {
             try {
-                const response = await fetch(`/api/detection/${detectionId}/video`);
-                const videoInfo = await response.json();
-                
-                const videoContainer = document.getElementById('videoContainer');
-                
-                if (videoInfo.error) {
-                    videoContainer.innerHTML = `<p class="error">Video not available: ${videoInfo.error}</p>`;
-                } else {
-                    const hasDetectionBox = videoInfo.bbox && videoInfo.bbox.x !== null;
-                    videoContainer.innerHTML = `
-                        <video controls preload="metadata" style="width: 100%; max-height: 400px;" 
-                               id="detectionVideo">
-                            <source src="${videoInfo.stream_url}#t=${videoInfo.start_time.toFixed(1)},${videoInfo.end_time.toFixed(1)}" type="video/mp4">
+                const response = await fetch(`/api/motion_event/${eventId}`);
+                const event = await response.json();
+
+                const modal = document.getElementById('eventModal');
+                const title = document.getElementById('modalTitle');
+                const body = document.getElementById('modalBody');
+
+                title.textContent = `Event ${event.id} - ${new Date(event.start_time).toLocaleString()}`;
+
+                body.innerHTML = `
+                    <div style="margin-bottom: 1rem;">
+                        <strong>Duration:</strong> ${parseFloat(event.duration_seconds).toFixed(1)} seconds<br>
+                        <strong>Video:</strong> ${event.video_file}<br>
+                        <strong>Face Count:</strong> ${event.face_count}<br>
+                        <strong>Object Count:</strong> ${event.object_count}<br>
+                        <strong>Processed:</strong> ${event.processed ? 'Yes' : 'No'}
+                    </div>
+
+                    ${event.object_detections && event.object_detections.length > 0 ? `
+                        <h4 style="margin-bottom: 0.5rem;">Object Detections (${event.object_detections.length})</h4>
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                            ${event.object_detections.map(od => `
+                                <div style="border: 1px solid var(--border-light); padding: 0.5rem; border-radius: 4px; background: var(--background);">
+                                    <div style="font-weight: 600; color: var(--warning-color);">${od.class_name}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                                        ${(od.confidence * 100).toFixed(1)}% confidence
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+
+                    ${event.face_detections && event.face_detections.length > 0 ? `
+                        <h4 style="margin-bottom: 0.5rem;">Face Detections (${event.face_detections.length})</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;">
+                            ${event.face_detections.map(fd => `
+                                <div style="border: 1px solid var(--border-light); padding: 0.5rem; border-radius: 4px; text-align: center;">
+                                    <img src="/api/face_detection/${fd.id}/image"
+                                         style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; margin-bottom: 0.25rem;"
+                                         onerror="this.style.display='none'">
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                                        ${(fd.confidence * 100).toFixed(1)}% confidence
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+
+                    ${!event.object_detections?.length && !event.face_detections?.length ?
+                        '<p style="color: var(--text-secondary); margin-bottom: 1rem;">No detections for this event.</p>' : ''}
+
+                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-light);">
+                        <video controls style="width: 100%; max-height: 300px; border-radius: 4px;">
+                            <source src="/api/serve_video/${event.video_file}" type="video/mp4">
                             Your browser does not support the video tag.
                         </video>
-                        ${hasDetectionBox ? '<div class="detection-overlay" id="detectionOverlay" data-label="Detection"></div>' : ''}
-                        <div class="video-info" style="margin-top: 15px;">
-                            <p><strong>Video:</strong> ${videoInfo.video_path}</p>
-                            <p><strong>Detection Time:</strong> ${videoInfo.detection_time.toFixed(1)}s</p>
-                            <p><strong>Playback Range:</strong> ${videoInfo.start_time.toFixed(1)}s - ${videoInfo.end_time.toFixed(1)}s</p>
-                            ${hasDetectionBox ? `<p><strong>Detection Box:</strong> ${videoInfo.bbox.width}x${videoInfo.bbox.height} at (${videoInfo.bbox.x}, ${videoInfo.bbox.y})</p>` : ''}
-                            <div style="margin-top: 10px;">
-                                <button class="btn" onclick="seekToDetection(${videoInfo.detection_time})">
-                                    Jump to Detection
-                                </button>
-                                <button class="btn" onclick="playFromStart(${videoInfo.start_time})">
-                                    Play from Start
-                                </button>
-                                ${hasDetectionBox ? '<button class="btn" onclick="toggleDetectionOverlay()" id="toggleOverlayBtn">Show Detection Box</button>' : ''}
-                            </div>
-                        </div>
-                    `;
-                    
-                    // Set up video event listeners
-                    const video = document.getElementById('detectionVideo');
-                    video.addEventListener('loadedmetadata', function() {
-                        // Set initial time to start of segment
-                        video.currentTime = videoInfo.start_time;
-                        
-                        // Set up detection overlay if available
-                        if (hasDetectionBox) {
-                            setupDetectionOverlay(video, videoInfo.bbox);
-                        }
-                    });
-                    
-                    // Add time update listener to show detection marker
-                    video.addEventListener('timeupdate', function() {
-                        const currentTime = video.currentTime;
-                        const detectionTime = videoInfo.detection_time;
-                        
-                        // Highlight when near detection time (within 0.5 seconds)
-                        if (Math.abs(currentTime - detectionTime) < 0.5) {
-                            video.style.border = '3px solid #ff4444';
-                        } else {
-                            video.style.border = 'none';
-                        }
-                    });
-                }
+                    </div>
+                `;
+
+                modal.style.display = 'block';
+
             } catch (error) {
-                console.error('Error loading video info:', error);
-                const videoContainer = document.getElementById('videoContainer');
-                videoContainer.innerHTML = '<p class="error">Error loading video information</p>';
-            }
-        }
-
-        function seekToDetection(detectionTime) {
-            const video = document.getElementById('detectionVideo');
-            if (video) {
-                video.currentTime = detectionTime;
-                video.play();
-            }
-        }
-
-        function playFromStart(startTime) {
-            const video = document.getElementById('detectionVideo');
-            if (video) {
-                video.currentTime = startTime;
-                video.play();
+                console.error('Error loading event details:', error);
             }
         }
 
         function closeModal() {
-            document.getElementById('detectionModal').style.display = 'none';
+            document.getElementById('eventModal').style.display = 'none';
         }
 
-        function changePage(direction) {
-            currentPage += direction;
-            if (currentPage < 1) currentPage = 1;
-            if (currentPage > totalPages) currentPage = totalPages;
-            loadDetections();
-        }
+        function hideEvents() {
+            document.getElementById('eventsContainer').style.display = 'none';
+            currentHour = null;
 
-        function clearFilters() {
-            document.getElementById('objectTypeFilter').value = '';
-            document.getElementById('dateFilter').value = '';
-            document.getElementById('semanticQuery').value = '';
-            isSemanticSearch = false;
-            currentSearchQuery = '';
-            currentPage = 1;
-            loadDetections();
-            
-            // Hide search result info
-            const searchInfo = document.querySelector('.search-result-info');
-            if (searchInfo) {
-                searchInfo.remove();
-            }
-        }
-
-        async function loadSearchSuggestions() {
-            try {
-                const response = await fetch('/api/search/suggestions');
-                const data = await response.json();
-                
-                const suggestionsList = document.getElementById('suggestionsList');
-                suggestionsList.innerHTML = '';
-                
-                data.suggestions.slice(0, 8).forEach(suggestion => {
-                    const btn = document.createElement('button');
-                    btn.className = 'suggestion-btn';
-                    btn.textContent = suggestion;
-                    btn.onclick = () => {
-                        document.getElementById('semanticQuery').value = suggestion;
-                        performSemanticSearch();
-                    };
-                    suggestionsList.appendChild(btn);
-                });
-                
-                document.getElementById('searchSuggestions').style.display = 'block';
-            } catch (error) {
-                console.error('Error loading search suggestions:', error);
-            }
-        }
-
-        async function performSemanticSearch() {
-            const query = document.getElementById('semanticQuery').value.trim();
-            if (!query) {
-                alert('Please enter a search query');
-                return;
-            }
-
-            const statusDiv = document.getElementById('searchStatus');
-            statusDiv.textContent = 'Searching...';
-            statusDiv.style.color = '#667eea';
-
-            try {
-                const response = await fetch('/api/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        query: query,
-                        top_k: 50,
-                        threshold: 0.3
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.error) {
-                    statusDiv.textContent = `Error: ${data.error}`;
-                    statusDiv.style.color = '#dc3545';
-                    return;
-                }
-
-                isSemanticSearch = true;
-                currentSearchQuery = query;
-                currentPage = 1;
-
-                // Display search results
-                displaySemanticResults(data);
-                
-                statusDiv.textContent = `Found ${data.total_found} results for "${query}"`;
-                statusDiv.style.color = '#28a745';
-
-            } catch (error) {
-                console.error('Error performing semantic search:', error);
-                statusDiv.textContent = 'Search failed. Please try again.';
-                statusDiv.style.color = '#dc3545';
-            }
-        }
-
-        function displaySemanticResults(data) {
-            const container = document.getElementById('detectionsContainer');
-            
-            // Remove existing search info
-            const existingInfo = document.querySelector('.search-result-info');
-            if (existingInfo) {
-                existingInfo.remove();
-            }
-
-            if (data.results.length === 0) {
-                container.innerHTML = `
-                    <div class="no-results">
-                        <h3>No results found</h3>
-                        <p>Try adjusting your search query or check if captions are indexed</p>
-                        <button class="btn" onclick="indexCaptions()" style="margin-top: 15px;">Index Captions First</button>
-                    </div>
-                `;
-                document.getElementById('pagination').style.display = 'none';
-                return;
-            }
-
-            // Add search result info
-            const searchInfo = document.createElement('div');
-            searchInfo.className = 'search-result-info';
-            searchInfo.innerHTML = `
-                <strong>AI Search Results for:</strong> "${data.query}"<br>
-                <small>Found ${data.total_found} matches • Results sorted by similarity</small>
-            `;
-            container.parentNode.insertBefore(searchInfo, container);
-
-            // Create detection grid with similarity scores
-            const grid = document.createElement('div');
-            grid.className = 'detections-grid';
-
-            data.results.forEach(result => {
-                const card = createSemanticSearchCard(result.detection, result.similarity);
-                grid.appendChild(card);
+            // Remove active hour
+            document.querySelectorAll('.hour-block').forEach(block => {
+                block.classList.remove('active');
             });
-
-            container.innerHTML = '';
-            container.appendChild(grid);
-
-            // Hide pagination for search results
-            document.getElementById('pagination').style.display = 'none';
         }
 
-        function createSemanticSearchCard(detection, similarity) {
-            const card = document.createElement('div');
-            card.className = 'detection-card';
-            card.onclick = () => showDetectionModal(detection);
-
-            const imageUrl = `/api/detection/${detection.id}/image`;
-            const datetime = new Date(detection.time).toLocaleString();
-            const confidence = (detection.confidence * 100).toFixed(1);
-            const similarityPercent = (similarity * 100).toFixed(1);
-
-            card.innerHTML = `
-                <img src="${imageUrl}" alt="${detection.object_type}" class="detection-image" 
-                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5JbWFnZSBOb3QgRm91bmQ8L3RleHQ+PC9zdmc+'">
-                <div class="detection-info">
-                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                        <span class="detection-type">${detection.object_type}</span>
-                        <span class="similarity-score">${similarityPercent}%</span>
-                    </div>
-                    <div class="detection-time">${datetime}</div>
-                    <div class="detection-confidence">Confidence: ${confidence}%</div>
-                    ${detection.caption ? `<div class="detection-caption">${detection.caption}</div>` : ''}
-                </div>
-            `;
-
-            return card;
-        }
-
-        async function indexCaptions() {
-            const statusDiv = document.getElementById('searchStatus');
-            statusDiv.textContent = 'Indexing captions... This may take a few minutes.';
-            statusDiv.style.color = '#ffc107';
-
-            try {
-                const response = await fetch('/api/index_captions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ force_reindex: false })
-                });
-
-                const data = await response.json();
-
-                if (data.error) {
-                    statusDiv.textContent = `Indexing failed: ${data.error}`;
-                    statusDiv.style.color = '#dc3545';
-                    return;
-                }
-
-                statusDiv.textContent = `${data.message}. You can now search!`;
-                statusDiv.style.color = '#28a745';
-
-            } catch (error) {
-                console.error('Error indexing captions:', error);
-                statusDiv.textContent = 'Indexing failed. Please try again.';
-                statusDiv.style.color = '#dc3545';
-            }
-        }
-
-        // Dark mode functionality
-        function initializeDarkMode() {
-            const savedTheme = localStorage.getItem('darkMode');
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            
-            if (savedTheme === 'true' || (!savedTheme && prefersDark)) {
-                document.body.classList.add('dark-mode');
-                updateDarkModeToggle(true);
-            }
-        }
-
-        function toggleDarkMode() {
-            const isDarkMode = document.body.classList.toggle('dark-mode');
-            localStorage.setItem('darkMode', isDarkMode.toString());
-            updateDarkModeToggle(isDarkMode);
-        }
-
-        function updateDarkModeToggle(isDark) {
-            const icon = document.getElementById('darkModeIcon');
-            const text = document.getElementById('darkModeText');
-            
-            if (isDark) {
-                icon.textContent = '☀️';
-                text.textContent = 'Light';
-            } else {
-                icon.textContent = '🌙';
-                text.textContent = 'Dark';
-            }
-        }
-
-        // Detection overlay functions
-        function setupDetectionOverlay(video, bbox) {
-            const overlay = document.getElementById('detectionOverlay');
-            if (!overlay) return;
-            
-            function updateOverlayPosition() {
-                const videoRect = video.getBoundingClientRect();
-                const containerRect = video.parentElement.getBoundingClientRect();
-                
-                // Calculate video's actual dimensions (accounting for aspect ratio)
-                const videoAspectRatio = video.videoWidth / video.videoHeight;
-                const containerAspectRatio = videoRect.width / videoRect.height;
-                
-                let videoActualWidth, videoActualHeight;
-                let offsetX = 0, offsetY = 0;
-                
-                if (videoAspectRatio > containerAspectRatio) {
-                    // Video is wider than container
-                    videoActualWidth = videoRect.width;
-                    videoActualHeight = videoRect.width / videoAspectRatio;
-                    offsetY = (videoRect.height - videoActualHeight) / 2;
-                } else {
-                    // Video is taller than container
-                    videoActualHeight = videoRect.height;
-                    videoActualWidth = videoRect.height * videoAspectRatio;
-                    offsetX = (videoRect.width - videoActualWidth) / 2;
-                }
-                
-                // Scale bounding box coordinates to video display size
-                const scaleX = videoActualWidth / video.videoWidth;
-                const scaleY = videoActualHeight / video.videoHeight;
-                
-                const overlayX = bbox.x * scaleX + offsetX;
-                const overlayY = bbox.y * scaleY + offsetY;
-                const overlayWidth = bbox.width * scaleX;
-                const overlayHeight = bbox.height * scaleY;
-                
-                overlay.style.left = overlayX + 'px';
-                overlay.style.top = overlayY + 'px';
-                overlay.style.width = overlayWidth + 'px';
-                overlay.style.height = overlayHeight + 'px';
-            }
-            
-            // Update overlay position when video dimensions change
-            video.addEventListener('loadedmetadata', updateOverlayPosition);
-            video.addEventListener('resize', updateOverlayPosition);
-            window.addEventListener('resize', updateOverlayPosition);
-            
-            // Initial position update
-            if (video.readyState >= 2) { // HAVE_CURRENT_DATA
-                updateOverlayPosition();
-            }
-        }
-        
-        function toggleDetectionOverlay() {
-            const overlay = document.getElementById('detectionOverlay');
-            const btn = document.getElementById('toggleOverlayBtn');
-            
-            if (!overlay || !btn) return;
-            
-            if (overlay.style.display === 'none' || overlay.style.display === '') {
-                overlay.style.display = 'block';
-                btn.textContent = 'Hide Detection Box';
-            } else {
-                overlay.style.display = 'none';
-                btn.textContent = 'Show Detection Box';
-            }
+        function formatHour(hour) {
+            const h = parseInt(hour);
+            if (h === 0) return '12 AM';
+            if (h < 12) return `${h} AM`;
+            if (h === 12) return '12 PM';
+            return `${h - 12} PM`;
         }
 
         // Close modal when clicking outside
         window.onclick = function(event) {
-            const modal = document.getElementById('detectionModal');
+            const modal = document.getElementById('eventModal');
             if (event.target === modal) {
                 closeModal();
             }

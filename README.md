@@ -1,147 +1,68 @@
-# AEye - Video Object Detection
+# AEye - Motion Detection & Object Recognition System
 
-AEye: an AI-powered object detection system with day-based database sharding and web interface.
+AEye: An AI-powered motion detection system with real-time object recognition, face detection, and interactive web interface.
 
 ## Features
 
-- **Day-based Database Sharding**: Scalable storage with separate database files per day
-- **Multiple YOLO Models**: Support for different YOLO model sizes from nano to extra-large
-- **Web Interface**: Browse detections by date with dynamic date switching
-- **Video Recording**: Organized video storage by date/hour/minute
-- **Real-time Processing**: Support for video files, webcams, and RTSP streams
+- **Motion-Triggered Recording**: Smart video recording with pre/post motion buffers
+- **Real-time Object Detection**: YOLO-powered object recognition with live thumbnails
+- **Face Detection & Recognition**: InsightFace integration for face detection and embeddings
+- **Interactive Web Dashboard**: Timeline-based interface with object thumbnails and classes
+- **Date-based Organization**: Automatic file and database organization by date
+- **Multi-Source Support**: Webcams, IP cameras, RTSP streams, and video files
 
 ## Quick Start
 
-### 1. Download YOLO Models
+### 1. Start Motion Detection System
 
 ```bash
-# Download recommended model (YOLOv8 Small - good balance of speed/accuracy)
-./download_models.sh
+# Default webcam with motion detection
+python3 main.py
 
-# Or download specific model sizes
-./download_models.sh small    # YOLOv8 Small (21.5MB)
-./download_models.sh medium   # YOLOv8 Medium (49.7MB)
-./download_models.sh large    # YOLOv8 Large (83.7MB)
+# IP camera/RTSP stream
+python3 main.py --video-source rtsp://192.168.1.100:554/stream
 
-# See all available models
-python3 processor.py --list-models
+# Custom motion sensitivity and recording settings
+python3 main.py --video-source 0 --pre-motion 30 --post-motion 30
 ```
 
-### 2. Process Video/Stream
+### 2. Launch Web Dashboard
 
 ```bash
-# Video file with default model
-python3 processor.py video.mp4 --confidence 0.5
-
-# Video file with specific model
-python3 processor.py video.mp4 --model yolov8s.pt --confidence 0.5
-
-# Webcam (auto-detected)
-python3 processor.py 0 --confidence 0.5
-
-# RTSP stream with recording
-python3 processor.py rtsp://192.168.1.100:554/stream --confidence 0.5 --record
-```
-
-### 3. View Results
-
-```bash
-# View current date
+# Local access
 python3 web_viewer.py --port 3000
 
-# View specific date
-python3 web_viewer.py --date 2025-09-09 --port 3000
-
-# From other PC on network
+# Network access (from other devices)
 python3 web_viewer.py --host 0.0.0.0 --port 3000
+
+# View specific date
+python3 web_viewer.py --date 2025-09-15 --port 3000
 ```
 
-Visit http://localhost:3000 to browse detections.
+Visit http://localhost:3000 to view the interactive timeline with object thumbnails and motion events.
 
-
-## Docker 
-
-### Build and Setup
+### 3. Optional: Process Existing Videos
 
 ```bash
-# Build the image
-./docker/docker-run.sh build
+# Process video file for object detection
+python3 processor.py video.mp4 --confidence 0.5 --model yolov8s.pt
 ```
 
-### Run Both Services (Recommended)
+## Web Dashboard Features
 
-```bash
-# Run processor + web viewer together in background
-./docker/docker-run.sh both 0 --record --confidence 0.5
+### Interactive Timeline
+- **24-Hour View**: Hourly activity blocks with event counts
+- **Object Thumbnails**: Live-generated crops from detected objects
+- **Object Classes**: Display detected classes (car, person, etc.) with counts
+- **Event Details**: Click events for full video playback and detection details
+- **Date Navigation**: Easy switching between available dates
+- **Responsive Design**: Works on desktop and mobile devices
 
-# Run with RTSP stream
-./docker/docker-run.sh both rtsp://camera --confidence 0.3
-
-# Check status and manage
-./docker/docker-run.sh status
-./docker/docker-run.sh logs processor
-./docker/docker-run.sh stop all
-```
-
-### Individual Services
-
-```bash
-# Web viewer only
-./docker/docker-run.sh viewer
-
-# Processor only
-./docker/docker-run.sh processor video.mp4 --confidence 0.5
-
-# Debug shell
-./docker/docker-run.sh shell
-```
-
-## Raspberry Pi Optimizations
-
-### Setup and Status
-
-```bash
-# Check Pi system status and get recommendations
-./docker/docker-pi.sh status
-
-# Build Pi-optimized image
-./docker/docker-pi.sh build
-```
-
-### Run Both Services (Recommended for Pi)
-
-```bash
-# Run processor + viewer with Pi optimizations
-./docker/docker-pi.sh both 0 --record --confidence 0.4
-
-# Run with RTSP and performance tuning
-./docker/docker-pi.sh both rtsp://camera --frame-skip 3 --confidence 0.4 --resize-factor 0.5
-
-# Monitor Pi performance
-./docker/docker-pi.sh monitor
-./docker/docker-pi.sh logs processor
-./docker/docker-pi.sh stop all
-```
-
-### Individual Pi Services
-
-```bash
-# Processor only with Pi optimizations
-./docker/docker-pi.sh processor rtsp://camera --frame-skip 3 --confidence 0.4 --resize-factor 0.5
-
-# Web viewer only
-./docker/docker-pi.sh viewer
-```
-
-### Pi Performance Tips
-
-- Use `--frame-skip 2-4` for better performance
-- Set `--confidence 0.4+` to reduce false positives  
-- Use `--resize-factor 0.5-0.75` for faster processing
-- Limit `--max-detections` to 5-10
-- Monitor temperature with `./docker/docker-pi.sh status`
-
-
+### Motion Event Cards
+- **Real-time Thumbnails**: Object crops generated from video frames
+- **Detection Summary**: Face count, object count, and processing status
+- **Class Grouping**: Multiple detections of same class grouped together
+- **Video Playback**: Integrated video player for each motion event
 
 ## YOLO Model Options
 
@@ -157,32 +78,128 @@ Visit http://localhost:3000 to browse detections.
 
 ```
 data/
-├── db/                    # Daily database files
-│   ├── detections_2025-09-09.db
-│   └── detections_2025-09-10.db
-└── videos/               # Video recordings
-    └── 2025-09-10/
-        └── 08/
-            ├── 30.mp4    # 08:30 recording
-            └── 31.mp4    # 08:31 recording
+├── db/
+│   └── detections.db           # SQLite database with motion events, faces, objects
+├── videos/                     # Motion-triggered video recordings
+│   ├── 2025_09_15/
+│   │   ├── 20250915_073949.mp4 # Timestamped motion events
+│   │   ├── 20250915_074016.mp4
+│   │   └── 20250915_074244.mp4
+│   └── 2025_09_14/
+│       └── [previous videos...]
+└── images/                     # Optional: exported frames/crops
+    ├── 2025_09_15/
+    └── 2025_09_14/
 ```
+
+### Database Schema
+
+**motion_events**: Motion detection events with video references
+- Video file paths, timestamps, duration
+- Face count, object count, processing status
+
+**face_detections**: Face detection results with crops and embeddings
+- Linked to motion events, confidence scores, bounding boxes
+- Face crop images stored as binary data
+
+**object_detections**: Object detection results with classifications
+- Class names (car, person, etc.), confidence scores, bounding boxes
+- Linked to motion events for thumbnail generation
 
 ## Command Line Options
 
-**Processor (`processor.py`):**
-- `--model`: YOLO model to use (default: yolov8n.pt)
-- `--confidence`: Detection threshold 0.0-1.0 (default: 0.15)
-- `--base-path`: Data storage path (default: data)
-- `--record`: Record video files for streams
-- `--show-live`: Display video during processing
-- `--list-models`: Show available YOLO models
+**Motion Detection System (`main.py`):**
+- `--video-source`: Video source (webcam index, file, or RTSP URL) (default: 0)
+- `--output-dir`: Base output directory (videos/, images/, db/ created inside) (default: data/)
+- `--pre-motion`: Seconds to record before motion (default: 30)
+- `--post-motion`: Seconds to record after motion (default: 30)
+- `--buffer-duration`: Circular buffer duration in seconds (default: 60)
+- `--fps`: Recording frame rate (default: 20)
 
 **Web Viewer (`web_viewer.py`):**
 - `--base-path`: Data storage path (default: data)
-- `--date`: Specific date to view (YYYY-MM-DD)
+- `--date`: Specific date to view (YYYY-MM-DD format)
 - `--host`: Host to bind to (default: localhost)
 - `--port`: Port to bind to (default: 3000)
+- `--debug`: Enable debug mode
 
+## Current Setup Examples
 
-#### ctronics camera:
+### Mac Setup (Local Development)
+
+```bash
+# Start motion detection with IP camera
+python3 main.py --video-source rtsp://192.168.6.244:554/11
+
+# Launch web viewer
+python3 web_viewer.py --port 3000
+```
+
+### Linux Setup (Server/Remote)
+
+```bash
+# Start motion detection (background processing)
+python3 main.py --video-source rtsp://192.168.6.244:554/11 &
+
+# Launch web viewer for network access
+python3 web_viewer.py --host 0.0.0.0 --port 3000
+```
+
+### Camera Configuration
+
+```bash
+# Ctronics camera example
 rtsp://192.168.6.244:554/11
+
+# Generic RTSP format
+rtsp://[username]:[password]@[ip]:[port]/[stream_path]
+```
+
+## Recent Updates
+
+### v2.1.0 - Enhanced Web Interface
+- ✅ **Object Thumbnails**: Real-time object crop generation from video frames
+- ✅ **Class Display**: Show detected object classes (car, person, etc.) with counts
+- ✅ **Video Path Fix**: Resolved 404 errors for video serving endpoints
+- ✅ **Interactive Cards**: Enhanced motion event cards with visual previews
+- ✅ **Timeline Navigation**: 24-hour activity timeline with hourly event counts
+
+### v2.0.0 - Motion Detection System
+- ✅ **Smart Recording**: Motion-triggered video recording with circular buffers
+- ✅ **Face Detection**: InsightFace integration with crop storage
+- ✅ **Object Recognition**: YOLO integration for real-time object detection
+- ✅ **Database Integration**: SQLite storage for events, faces, and objects
+- ✅ **Web Dashboard**: Interactive timeline and event viewer
+
+---
+
+<!--
+## Legacy Docker Configuration (Archived)
+
+### Build and Setup
+```bash
+./docker/docker-run.sh build
+```
+
+### Run Services
+```bash
+./docker/docker-run.sh both 0 --record --confidence 0.5
+./docker/docker-run.sh both rtsp://camera --confidence 0.3
+```
+
+### Raspberry Pi Optimizations (Archived)
+```bash
+./docker/docker-pi.sh both 0 --record --confidence 0.4
+./docker/docker-pi.sh both rtsp://camera --frame-skip 3 --confidence 0.4 --resize-factor 0.5
+```
+
+### Legacy Commands (Archived)
+```bash
+# Legacy processor
+python3 processor.py rtsp://192.168.6.244:554/11 --continuous --record
+
+# Legacy face detection
+python facedetect.py --source-db data/db/detections_2025-09-11.db
+python web_faces.py --face-db data/db/faces_detections_2025-09-11.db
+```
+-->

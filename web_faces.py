@@ -24,6 +24,20 @@ class FaceViewer:
         """Get database connection."""
         return sqlite3.connect(self.face_db_path)
     
+    def _convert_bbox_fields(self, rows):
+        """Convert bbox fields from bytes to integers."""
+        result = []
+        for row in rows:
+            converted_row = list(row)
+            # Convert bbox fields (indices 3-6) from bytes to int if needed
+            for i in range(3, 7):
+                if isinstance(converted_row[i], bytes):
+                    converted_row[i] = int.from_bytes(converted_row[i], byteorder='little')
+                elif converted_row[i] is None:
+                    converted_row[i] = 0
+            result.append(tuple(converted_row))
+        return result
+    
     def get_face_groups(self, limit: int = 100, offset: int = 0):
         """Get face groups with statistics."""
         with self._get_connection() as conn:
@@ -57,19 +71,7 @@ class FaceViewer:
             cursor.execute(query, (group_id, limit))
             rows = cursor.fetchall()
             
-            # Convert bytes to integers for bbox fields
-            result = []
-            for row in rows:
-                converted_row = list(row)
-                # Convert bbox fields (indices 3-6) from bytes to int if needed
-                for i in range(3, 7):
-                    if isinstance(converted_row[i], bytes):
-                        converted_row[i] = int.from_bytes(converted_row[i], byteorder='little')
-                    elif converted_row[i] is None:
-                        converted_row[i] = 0
-                result.append(tuple(converted_row))
-            
-            return result
+            return self._convert_bbox_fields(rows)
     
     def get_ungrouped_faces(self, limit: int = 50, offset: int = 0):
         """Get faces that are not in any group."""
@@ -88,19 +90,7 @@ class FaceViewer:
             cursor.execute(query, (limit, offset))
             rows = cursor.fetchall()
             
-            # Convert bytes to integers for bbox fields
-            result = []
-            for row in rows:
-                converted_row = list(row)
-                # Convert bbox fields (indices 3-6) from bytes to int if needed
-                for i in range(3, 7):
-                    if isinstance(converted_row[i], bytes):
-                        converted_row[i] = int.from_bytes(converted_row[i], byteorder='little')
-                    elif converted_row[i] is None:
-                        converted_row[i] = 0
-                result.append(tuple(converted_row))
-            
-            return result
+            return self._convert_bbox_fields(rows)
     
     def get_face_by_id(self, face_id: int):
         """Get a specific face by ID."""
@@ -108,7 +98,7 @@ class FaceViewer:
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT id, detection_id, face_crop, face_encoding, similarity_group, 
+                SELECT id, detection_id, face_crop, face_embeddings, similarity_group, 
                        confidence, bbox_x, bbox_y, bbox_width, bbox_height, created_at
                 FROM faces WHERE id = ?
             """, (face_id,))
@@ -136,19 +126,7 @@ class FaceViewer:
             cursor.execute(query, (limit, offset))
             rows = cursor.fetchall()
             
-            # Convert bytes to integers for bbox fields and handle None values
-            result = []
-            for row in rows:
-                converted_row = list(row)
-                # Convert bbox fields (indices 3-6) from bytes to int if needed
-                for i in range(3, 7):
-                    if isinstance(converted_row[i], bytes):
-                        converted_row[i] = int.from_bytes(converted_row[i], byteorder='little')
-                    elif converted_row[i] is None:
-                        converted_row[i] = 0
-                result.append(tuple(converted_row))
-            
-            return result
+            return self._convert_bbox_fields(rows)
     
     def get_grouped_faces_with_details(self, limit: int = 100, offset: int = 0):
         """Get all grouped faces with group information."""
@@ -168,19 +146,7 @@ class FaceViewer:
             cursor.execute(query, (limit, offset))
             rows = cursor.fetchall()
             
-            # Convert bytes to integers for bbox fields
-            result = []
-            for row in rows:
-                converted_row = list(row)
-                # Convert bbox fields (indices 3-6) from bytes to int if needed
-                for i in range(3, 7):
-                    if isinstance(converted_row[i], bytes):
-                        converted_row[i] = int.from_bytes(converted_row[i], byteorder='little')
-                    elif converted_row[i] is None:
-                        converted_row[i] = 0
-                result.append(tuple(converted_row))
-            
-            return result
+            return self._convert_bbox_fields(rows)
 
     def get_face_statistics(self):
         """Get statistics about faces and groups."""
@@ -217,7 +183,7 @@ class FaceViewer:
             }
 
 
-# Initialize viewer (will be updated in main function)
+# Global viewer instance (initialized in main function)
 viewer = None
 
 # HTML template for the face viewer
@@ -385,6 +351,8 @@ FACE_VIEWER_TEMPLATE = """
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             min-height: 400px;
             transition: all 0.3s ease;
+            width: 100%;
+            overflow: hidden;
         }
 
         .dark-mode .content-panel {
@@ -462,24 +430,6 @@ FACE_VIEWER_TEMPLATE = """
             border-color: #667eea;
         }
 
-        .ungrouped-faces {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
-        }
-
-        .ungrouped-face {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 10px;
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-
-        .dark-mode .ungrouped-face {
-            background: #4a5568;
-        }
 
         .all-faces {
             display: grid;
@@ -487,6 +437,7 @@ FACE_VIEWER_TEMPLATE = """
             gap: 15px;
             margin-top: 20px;
         }
+
 
         .face-item {
             background: #f8f9fa;
@@ -661,7 +612,6 @@ FACE_VIEWER_TEMPLATE = """
         <div class="nav-tabs">
             <button class="nav-tab active" onclick="showTab('groups')">Face Groups</button>
             <button class="nav-tab" onclick="showTab('all')">All Faces</button>
-            <button class="nav-tab" onclick="showTab('ungrouped')">Ungrouped Faces</button>
         </div>
 
         <div class="content-panel">
@@ -673,11 +623,6 @@ FACE_VIEWER_TEMPLATE = """
             <div id="allTab" class="tab-content" style="display: none;">
                 <div class="loading" id="allLoading">Loading all faces...</div>
                 <div class="all-faces" id="allFaces" style="display: none;"></div>
-            </div>
-
-            <div id="ungroupedTab" class="tab-content" style="display: none;">
-                <div class="loading" id="ungroupedLoading">Loading ungrouped faces...</div>
-                <div class="ungrouped-faces" id="ungroupedFaces" style="display: none;"></div>
             </div>
         </div>
     </div>
@@ -787,30 +732,6 @@ FACE_VIEWER_TEMPLATE = """
                 });
         }
 
-        function loadUngroupedFaces() {
-            const loading = document.getElementById('ungroupedLoading');
-            const container = document.getElementById('ungroupedFaces');
-            
-            loading.style.display = 'block';
-            container.style.display = 'none';
-
-            fetch('/api/ungrouped_faces')
-                .then(response => response.json())
-                .then(faces => {
-                    loading.style.display = 'none';
-                    container.style.display = 'grid';
-                    container.innerHTML = '';
-
-                    faces.forEach(face => {
-                        const faceElement = createUngroupedFaceElement(face);
-                        container.appendChild(faceElement);
-                    });
-                })
-                .catch(error => {
-                    loading.innerHTML = `<div class="error">Error loading ungrouped faces: ${error.message}</div>`;
-                    console.error('Error loading ungrouped faces:', error);
-                });
-        }
 
         function createGroupElement(group) {
             const div = document.createElement('div');
@@ -850,29 +771,6 @@ FACE_VIEWER_TEMPLATE = """
             return div;
         }
 
-        function createUngroupedFaceElement(face) {
-            const div = document.createElement('div');
-            div.className = 'ungrouped-face';
-
-            const img = document.createElement('img');
-            img.className = 'face-thumbnail';
-            img.src = `/api/face/${face[0]}/image`; // face id
-            img.style.width = '100px';
-            img.style.height = '100px';
-            img.onerror = () => img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiBmaWxsPSIjZjhmOWZhIi8+Cjx0ZXh0IHg9IjUwIiB5PSI1NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzk5OTkiIGZvbnQtc2l6ZT0iMTIiPkZhY2U8L3RleHQ+Cjwvc3ZnPg==';
-
-            const info = document.createElement('div');
-            info.className = 'face-info';
-            info.innerHTML = `
-                <div>Confidence: ${(face[2] * 100).toFixed(1)}%</div>
-                <div>Detection: ${face[1]}</div>
-            `;
-
-            div.appendChild(img);
-            div.appendChild(info);
-
-            return div;
-        }
 
         function createAllFaceElement(face) {
             const div = document.createElement('div');
@@ -929,8 +827,6 @@ FACE_VIEWER_TEMPLATE = """
             // Load content if needed
             if (tab === 'all' && document.getElementById('allFaces').children.length === 0) {
                 loadAllFaces();
-            } else if (tab === 'ungrouped' && document.getElementById('ungroupedFaces').children.length === 0) {
-                loadUngroupedFaces();
             }
         }
 

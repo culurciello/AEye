@@ -4,14 +4,12 @@ import sqlite3
 import cv2
 import numpy as np
 import os
-import shutil
 import pickle
 import argparse
 import logging
 from typing import List, Dict
-from deepface import DeepFace
+from insightface.app import FaceAnalysis
 from tqdm import tqdm
-import tensorflow as tf
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -33,7 +31,7 @@ class FaceDetector:
         # Configure GPU usage
         self.configure_gpu()
         
-        # Initialize face detection using DeepFace
+        # Initialize face detection using PyTorch RetinaFace
         self.init_face_detector()
         
         # Load known faces for naming groups
@@ -72,25 +70,20 @@ class FaceDetector:
         return known_faces
     
     def configure_gpu(self):
-        """Configure GPU usage for TensorFlow/DeepFace."""
+        """Configure GPU usage for InsightFace."""
         try:
-            gpus = tf.config.list_physical_devices('GPU')
-            if gpus and self.use_gpu:
-                # Configure GPU memory growth to avoid allocating all GPU memory
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-                logger.info(f"GPU available and configured: {len(gpus)} GPU(s) detected")
+            if self.use_gpu:
+                # InsightFace will automatically detect and use available GPU
+                self.ctx_id = 0  # GPU context
+                logger.info("GPU enabled for InsightFace")
                 self.gpu_available = True
             else:
-                if not gpus:
-                    logger.info("No GPU detected, using CPU")
-                else:
-                    logger.info("GPU available but disabled by user, using CPU")
-                # Force CPU usage
-                tf.config.set_visible_devices([], 'GPU')
+                self.ctx_id = -1  # CPU context
+                logger.info("Using CPU for InsightFace")
                 self.gpu_available = False
         except Exception as e:
             logger.warning(f"GPU configuration failed, using CPU: {e}")
+            self.ctx_id = -1
             self.gpu_available = False
     
     def init_face_database(self):
@@ -134,12 +127,22 @@ class FaceDetector:
         logger.info(f"Initialized face database: {self.target_db_path}")
     
     def init_face_detector(self):
-        """Initialize face detection using DeepFace with optimized settings."""
-        self.detector_backend = 'retinaface'  # Better quality than opencv
-        self.model_name = 'Facenet'
-        self.distance_metric = 'cosine'
-        
-        logger.info(f"DeepFace initialized: detector={self.detector_backend}, model={self.model_name}")
+        """Initialize face detection using InsightFace."""
+        # Initialize InsightFace with default models (includes detection)
+        try:
+            self.app = FaceAnalysis(allowed_modules=['detection', 'recognition'])
+            self.app.prepare(ctx_id=self.ctx_id, det_size=(640, 640))
+            logger.info(f"InsightFace initialized with ctx_id: {self.ctx_id}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize with default models: {e}")
+            # Try with buffalo_l model which is more commonly available
+            try:
+                self.app = FaceAnalysis(name="buffalo_l")
+                self.app.prepare(ctx_id=self.ctx_id, det_size=(640, 640))
+                logger.info(f"InsightFace initialized with buffalo_l model, ctx_id: {self.ctx_id}")
+            except Exception as e2:
+                logger.error(f"Failed to initialize InsightFace: {e2}")
+                raise e2
     
     def extract_faces_from_detections(self):
         """Extract faces from all person detections in the source database."""
@@ -168,7 +171,7 @@ class FaceDetector:
             confidence = detection[2]
             
             # Convert crop bytes to image and detect faces
-            faces = self.detect_faces_in_crop(crop_bytes)
+            faces = self.detect_faces_in_crop(crop_bytes, debug_save_path="debug")
             
             # Save all faces from this detection
             for face_data in faces:
@@ -180,8 +183,8 @@ class FaceDetector:
         
         return faces_extracted
     
-    def detect_faces_in_crop(self, crop_bytes: bytes) -> List[Dict]:
-        """Detect faces in a single crop image using DeepFace."""
+    def detect_faces_in_crop(self, crop_bytes: bytes, debug_save_path: str = None) -> List[Dict]:
+        """Detect faces in a single crop image using InsightFace."""
         # Convert bytes to image
         nparr = np.frombuffer(crop_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -189,97 +192,97 @@ class FaceDetector:
         if image is None:
             return []
         
+        # Debug: save first few images to see what we're processing
+        if debug_save_path and not hasattr(self, '_debug_count'):
+            self._debug_count = 0
+        if debug_save_path and self._debug_count < 5:
+            debug_path = f"{debug_save_path}_crop_{self._debug_count}.jpg"
+            cv2.imwrite(debug_path, image)
+            logger.info(f"Debug: saved crop to {debug_path}")
+            self._debug_count += 1
+        
         face_data = []
         
         try:
-            # Use DeepFace.extract_faces to get face regions with better detector
-            face_objs = DeepFace.extract_faces(
-                img_path=image,
-                detector_backend=self.detector_backend,
-                # enforce_detection=True,
-                grayscale=False,
-                align=True  # Face alignment for better results
-            )
+            # Use InsightFace for face detection and recognition
+            logger.debug(f"Processing image of shape: {image.shape}")
+            faces = self.app.get(image)
             
-            for face_obj in face_objs:
-                # Extract the face array from the face_obj dictionary
-                face_array = face_obj['face']
-                facial_area = face_obj.get('facial_area', {})
-                face_confidence = face_obj.get('confidence', 0.0)
+            if not faces:
+                logger.debug("No faces detected in this image")
+                return []
+            
+            logger.debug(f"Found {len(faces)} faces in image")
+            
+            for face in faces:
+                # Extract face information
+                bbox = face.bbox  # [x1, y1, x2, y2]
+                confidence = face.det_score  # Detection confidence
                 
-                # Filter out low confidence detections to reduce false positives
-                if face_confidence < 0.95:  # High threshold for quality
-                    logger.debug(f"Skipping low confidence face: {face_confidence:.3f}")
+                # Filter out low confidence detections (lowered threshold for debugging)
+                if confidence < 0.75:  # Lower threshold to catch more faces
+                    logger.debug(f"Skipping low confidence face: {confidence:.3f}")
                     continue
-                
-                # Convert normalized face back to uint8 with proper RGB ordering
-                face_array_uint8 = (face_array * 255).astype(np.uint8)
-                
-                # Ensure proper color format (DeepFace uses RGB, OpenCV uses BGR)
-                if len(face_array_uint8.shape) == 3 and face_array_uint8.shape[2] == 3:
-                    face_array_bgr = cv2.cvtColor(face_array_uint8, cv2.COLOR_RGB2BGR)
                 else:
-                    face_array_bgr = face_array_uint8
+                    logger.info(f"Found face with confidence: {confidence:.3f}")
                 
-                # Convert face crop to bytes with high quality JPEG
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-                _, face_buffer = cv2.imencode('.jpg', face_array_bgr, encode_param)
-                face_bytes = face_buffer.tobytes()
-                
-                # Generate face embedding
-                face_embedding = self.get_face_embedding(face_array_uint8)
-
-                # Get bounding box from facial_area
-                bbox_x = facial_area.get('x', 0)
-                bbox_y = facial_area.get('y', 0)
-                bbox_w = facial_area.get('w', face_array_uint8.shape[1])
-                bbox_h = facial_area.get('h', face_array_uint8.shape[0])
+                # Extract bounding box coordinates
+                x1, y1, x2, y2 = bbox.astype(int)
+                bbox_w = x2 - x1
+                bbox_h = y2 - y1
                 
                 # Additional quality check - skip very small faces
                 if bbox_w < 30 or bbox_h < 30:
                     logger.debug(f"Skipping small face: {bbox_w}x{bbox_h}")
                     continue
                 
+                # Extract face crop from original image
+                face_crop = image[y1:y2, x1:x2]
+                
+                if face_crop.size == 0:
+                    continue
+                
+                # Convert face crop to bytes with high quality JPEG (no resizing)
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+                _, face_buffer = cv2.imencode('.jpg', face_crop, encode_param)
+                face_bytes = face_buffer.tobytes()
+                
+                # Get the raw embedding and normalize it manually to ensure proper normalization
+                face_embedding = face.embedding
+                # Normalize the embedding manually
+                norm = np.linalg.norm(face_embedding)
+                if norm > 0:
+                    face_embedding = face_embedding / norm
+                
+                logger.debug(f"Embedding norm after normalization: {np.linalg.norm(face_embedding):.3f}")
+                
                 face_data.append({
                     'crop': face_bytes,
                     'embedding': face_embedding,
-                    'bbox': (bbox_x, bbox_y, bbox_w, bbox_h),
-                    'confidence': face_confidence
+                    'bbox': (x1, y1, bbox_w, bbox_h),
+                    'confidence': confidence
                 })
                 
         except Exception as e:
             logger.debug(f"Face detection failed: {e}")
-
-
         
         return face_data
     
-    def get_face_embedding(self, face_img: np.ndarray) -> np.ndarray:
-        """Generate face embedding using DeepFace."""
-        try:
-            # Use DeepFace.represent to get face embedding
-            embedding = DeepFace.represent(
-                img_path=face_img,
-                model_name=self.model_name,
-                detector_backend='skip',  # Skip detection since we already have the face
-                enforce_detection=False
-            )[0]['embedding']
-            
-            return np.array(embedding, dtype=np.float32)
-            
-        except Exception as e:
-            logger.warning(f"Error generating face embedding: {e}")
-            # Return random embedding as fallback
-            return np.random.random(128).astype(np.float32)
+    # def get_face_embedding(self, face_img: np.ndarray) -> np.ndarray:
+    #     """Generate face embedding using InsightFace (this method is now unused as embeddings come from app.get)."""
+    #     # This method is now unused since InsightFace provides embeddings directly
+    #     # Keeping for compatibility but returning empty array
+    #     logger.warning("get_face_embedding called but embeddings should come from InsightFace directly")
+    #     return np.random.random(512).astype(np.float32)
     
     def save_face(self, detection_id: int, face_data: Dict, confidence: float):
         """Save a face to the database."""
         conn = sqlite3.connect(self.target_db_path)
         cursor = conn.cursor()
-        
+
         # Serialize face embedding
         embedding_bytes = pickle.dumps(face_data['embedding'])
-        
+
         bbox = face_data['bbox']
         cursor.execute('''
             INSERT INTO faces 
@@ -293,143 +296,183 @@ class FaceDetector:
         conn.close()
     
     def group_faces_by_similarity(self, min_samples: int = 2):
-        """Group faces by similarity using DeepFace verification."""
+        """Group faces by similarity using cosine distance between embeddings."""
         logger.info("Starting face grouping...")
         
         conn = sqlite3.connect(self.target_db_path)
         cursor = conn.cursor()
         
-        # Get all faces
-        cursor.execute('SELECT id, face_crop, confidence FROM faces')
+        # Get all faces with embeddings
+        cursor.execute('SELECT id, face_embeddings, confidence FROM faces WHERE face_embeddings IS NOT NULL')
         faces = cursor.fetchall()
         
         if not faces:
-            logger.warning("No faces found to group")
+            logger.warning("No faces with embeddings found to group")
             return
         
         logger.info(f"Grouping {len(faces)} faces...")
         
-        # Create temporary directory for face images
-        temp_dir = f"/tmp/faces_{os.getpid()}"
-        os.makedirs(temp_dir, exist_ok=True)
+        # Load embeddings
+        face_embeddings = []
+        face_ids = []
         
-        try:
-            # Save all face images to temporary files
-            face_paths = {}
-            for face_id, face_crop, confidence in tqdm(faces, desc="Preparing faces"):
-                temp_path = os.path.join(temp_dir, f"face_{face_id}.jpg")
-                with open(temp_path, 'wb') as f:
-                    f.write(face_crop)
-                face_paths[face_id] = temp_path
+        for face_id, embedding_bytes, confidence in faces:
+            try:
+                embedding = pickle.loads(embedding_bytes)
+                face_embeddings.append(embedding)
+                face_ids.append(face_id)
+            except Exception as e:
+                logger.debug(f"Error loading embedding for face {face_id}: {e}")
+                continue
+        
+        if not face_embeddings:
+            logger.warning("No valid embeddings found")
+            return
+        
+        face_embeddings = np.array(face_embeddings)
+        
+        # Group faces using distance-based similarity (similar to the example code pattern)
+        face_groups = []
+        processed_faces = set()
+        distance_threshold = 1.0 # Distance threshold for normalized embeddings (0.0=identical, 2.0=opposite)
+        
+        for i, embedding1 in enumerate(tqdm(face_embeddings, desc="Grouping faces")):
+            face_id1 = face_ids[i]
             
-            # Group faces using pairwise verification
-            face_groups = []
-            processed_faces = set()
+            if face_id1 in processed_faces:
+                continue
             
-            for i, (face_id1, _, _) in enumerate(tqdm(faces, desc="Grouping faces")):
-                if face_id1 in processed_faces:
+            current_group = [face_id1]
+            processed_faces.add(face_id1)
+            
+            # Compare with remaining faces
+            for j in range(i + 1, len(face_embeddings)):
+                face_id2 = face_ids[j]
+                
+                if face_id2 in processed_faces:
                     continue
                 
-                current_group = [face_id1]
-                processed_faces.add(face_id1)
+                embedding2 = face_embeddings[j]
                 
-                # Compare with remaining faces
-                for j in range(i + 1, len(faces)):
-                    face_id2, _, _ = faces[j]
-                    
-                    if face_id2 in processed_faces:
-                        continue
-                    
-                    # Verify if faces are similar
-                    if self.verify_faces(face_paths[face_id1], face_paths[face_id2]):
-                        current_group.append(face_id2)
-                        processed_faces.add(face_id2)
+                # Calculate distance between embeddings
+                distance = np.linalg.norm(embedding1 - embedding2)
                 
-                # Only keep groups with minimum samples
-                if len(current_group) >= min_samples:
-                    face_groups.append(current_group)
-                    logger.debug(f"Created group {len(face_groups)} with {len(current_group)} faces")
+                # Debug: Print some embedding stats for first few comparisons
+                if i < 3 and j < i + 3:
+                    print(f"Face {face_id1} vs {face_id2}: distance={distance:.3f}")
+                    print(f"  Embedding1 norm: {np.linalg.norm(embedding1):.3f}")
+                    print(f"  Embedding2 norm: {np.linalg.norm(embedding2):.3f}")
+                    print(f"  Embedding1 shape: {embedding1.shape}")
+                    print(f"  Embedding1 mean: {np.mean(embedding1):.3f}")
+                    print("---")
+                
+                if distance < distance_threshold:
+                    current_group.append(face_id2)
+                    processed_faces.add(face_id2)
             
-            # Update database with groups
-            self.save_face_groups(face_groups)
-            
-        finally:
-            # Clean up temporary directory
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
+            # Only keep groups with minimum samples
+            if len(current_group) >= min_samples:
+                face_groups.append(current_group)
+                logger.debug(f"Created group {len(face_groups)} with {len(current_group)} faces")
+        
+        # Update database with groups
+        self.save_face_groups(face_groups)
         
         logger.info(f"Created {len(face_groups)} face groups")
     
-    def verify_faces(self, path1: str, path2: str) -> bool:
-        """Verify if two faces belong to the same person."""
-        try:
-            result = DeepFace.verify(
-                img1_path=path1,
-                img2_path=path2,
-                model_name=self.model_name,
-                detector_backend=self.detector_backend,
-                distance_metric=self.distance_metric,
-                enforce_detection=False
-            )
-            return result['verified']
-        except Exception as e:
-            logger.debug(f"Face verification failed: {e}")
-            return False
+    def cosine_distance(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+        """Calculate cosine distance between two embeddings."""
+        # Normalize embeddings
+        norm1 = np.linalg.norm(embedding1)
+        norm2 = np.linalg.norm(embedding2)
+        
+        if norm1 == 0 or norm2 == 0:
+            return 1.0  # Maximum distance
+        
+        normalized1 = embedding1 / norm1
+        normalized2 = embedding2 / norm2
+        
+        # Calculate cosine similarity
+        similarity = np.dot(normalized1, normalized2)
+        
+        # Convert to distance (0 = identical, 2 = opposite)
+        distance = 1 - similarity
+        
+        return distance
+    
+    def verify_faces(self, embedding1: np.ndarray, embedding2: np.ndarray) -> bool:
+        """Verify if two face embeddings belong to the same person."""
+        distance = np.linalg.norm(embedding1 - embedding2)
+        return distance < 1.0  # Same threshold as grouping
     
     def identify_group_with_known_faces(self, representative_face_id: int) -> str:
         """Try to identify a face group by matching against known faces."""
         if not self.known_faces:
             return None
         
-        # Get the representative face image from database
+        # Get the representative face embedding from database
         conn = sqlite3.connect(self.target_db_path)
         cursor = conn.cursor()
-        cursor.execute('SELECT face_crop FROM faces WHERE id = ?', (representative_face_id,))
+        cursor.execute('SELECT face_embeddings FROM faces WHERE id = ?', (representative_face_id,))
         result = cursor.fetchone()
         conn.close()
         
-        if not result:
+        if not result or not result[0]:
             return None
         
-        face_crop_bytes = result[0]
-        
-        # Save the face crop to a temporary file
-        temp_face_path = f"/tmp/temp_face_{representative_face_id}.jpg"
         try:
-            with open(temp_face_path, 'wb') as f:
-                f.write(face_crop_bytes)
-            
-            # Try to match against each known face
-            for person_name, known_face_path in self.known_faces.items():
-                try:
-                    result = DeepFace.verify(
-                        img1_path=temp_face_path,
-                        img2_path=known_face_path,
-                        model_name=self.model_name,
-                        detector_backend=self.detector_backend,
-                        distance_metric=self.distance_metric,
-                        enforce_detection=False
-                    )
-                    
-                    if result['verified']:
-                        logger.info(f"Face group matched to known person: {person_name} (confidence: {result.get('distance', 'N/A')})")
-                        return person_name
-                except Exception as e:
-                    logger.debug(f"Error matching against {person_name}: {e}")
-                    continue
+            representative_embedding = pickle.loads(result[0])
+        except:
+            return None
         
-        except Exception as e:
-            logger.debug(f"Error in face identification: {e}")
-        finally:
-            # Clean up temporary file
+        # Try to match against each known face
+        for person_name, known_face_path in self.known_faces.items():
             try:
-                os.remove(temp_face_path)
-            except:
-                pass
+                # Load and process known face
+                known_img = cv2.imread(known_face_path)
+                if known_img is None:
+                    continue
+                
+                # Detect faces in known image
+                known_faces = self.detect_faces_in_known_image(known_img)
+                
+                if not known_faces:
+                    continue
+                
+                # Use the first detected face
+                known_embedding = known_faces[0]['embedding']
+                
+                # Compare embeddings
+                if self.verify_faces(representative_embedding, known_embedding):
+                    distance = np.linalg.norm(representative_embedding - known_embedding)
+                    logger.info(f"Face group matched to known person: {person_name} (distance: {distance:.3f})")
+                    return person_name
+                    
+            except Exception as e:
+                logger.debug(f"Error matching against {person_name}: {e}")
+                continue
         
         return None
+    
+    def detect_faces_in_known_image(self, image: np.ndarray) -> List[Dict]:
+        """Detect faces in a known reference image."""
+        try:
+            faces = self.app.get(image)
+            
+            if not faces:
+                return []
+            
+            result_faces = []
+            for face in faces:
+                # Use the normalized embedding from InsightFace
+                embedding = face.normed_embedding
+                result_faces.append({'embedding': embedding})
+            
+            return result_faces
+            
+        except Exception as e:
+            logger.debug(f"Error detecting faces in known image: {e}")
+            return []
     
     def save_face_groups(self, face_groups: List[List[int]]):
         """Save face groups to database."""
@@ -506,7 +549,7 @@ class FaceDetector:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Face detection and grouping for AEye database')
+    parser = argparse.ArgumentParser(description='Face detection and grouping for AEye database using InsightFace')
     parser.add_argument('--source-db', required=True,
                        help='Path to source detections database')
     parser.add_argument('--target-db', 
@@ -523,6 +566,8 @@ def main():
                        help='Set the logging level (default: INFO)')
     parser.add_argument('--no-gpu', action='store_true',
                        help='Disable GPU usage, force CPU-only processing')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug output and save sample images')
 
     args = parser.parse_args()
     
@@ -534,12 +579,13 @@ def main():
         args.target_db = os.path.join(source_dir, f"faces_{name_without_ext}.db")
     
     # Setup logging
+    log_level = 'DEBUG' if args.debug else args.log_level
     logging.basicConfig(
-        level=getattr(logging, args.log_level),
+        level=getattr(logging, log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('facedetect.log')
+            logging.FileHandler('facedetect2.log')
         ]
     )
     
@@ -558,7 +604,7 @@ def main():
             logger.info(f"Successfully extracted {faces_count} faces")
 
             # Save all faces to a folder to see they are extracted correctly
-            extracted_faces_dir = "extracted_faces/"
+            extracted_faces_dir = "extracted_faces2/"
             os.makedirs(extracted_faces_dir, exist_ok=True)
             conn = sqlite3.connect(args.target_db)
             cursor = conn.cursor()
