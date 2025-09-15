@@ -2,8 +2,6 @@
 
 import cv2
 import numpy as np
-import sqlite3
-import pickle
 import os
 import time
 import argparse
@@ -11,8 +9,6 @@ import logging
 import threading
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Tuple, Optional, List, Dict
-from dataclasses import dataclass
 
 # YOLO object detection
 try:
@@ -27,6 +23,7 @@ from lib.motion_detector import AdaptiveMotionDetector
 from lib.object_detector import ObjectDetector
 from lib.video_processor import CircularVideoBuffer, VideoSegment, VideoProcessor
 from lib.face_detector import FaceDetector
+from lib.database import DatabaseManager
 
 
 # Setup logger
@@ -95,24 +92,21 @@ class MotionTriggeredProcessor:
         
         self.video_buffer = CircularVideoBuffer(buffer_duration, fps)
 
+        # Initialize database manager
+        self.db_manager = DatabaseManager(self.db_path)
+
         # Initialize object detection
-        self.object_detector = ObjectDetector(self.db_path)
+        self.object_detector = ObjectDetector(self.db_manager)
         self.object_detector.init_yolo_detector()
         self.yolo_model = self.object_detector.yolo_model
 
         # Initialize face detection
-        self.face_detector = FaceDetector(self.use_gpu, self.db_path)
+        self.face_detector = FaceDetector(self.use_gpu, self.db_manager)
         self.face_detector.init_face_detector()
 
-        # Initialize database
-        self.init_database()
-
         # Initialize video processor
-        self.video_processor = VideoProcessor(self.videos_dir, self.fps, self.pre_motion_seconds, self.post_motion_seconds)
+        self.video_processor = VideoProcessor(self.videos_dir, self.fps, self.pre_motion_seconds, self.post_motion_seconds, self.db_manager)
         self.video_processor.video_buffer = self.video_buffer
-
-        # Bind methods to video processor that need access to main class
-        self.video_processor.store_motion_event = self.store_motion_event
 
         # Pre-initialize video codec
         self.video_processor._warmup_video_writer()
@@ -168,102 +162,6 @@ class MotionTriggeredProcessor:
         logger.info("Motion detection warm-up completed")
 
     
-    def init_database(self):
-        """Initialize database for storing motion and face detections."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Create motion events table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS motion_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                start_time TIMESTAMP,
-                end_time TIMESTAMP,
-                video_file TEXT,
-                duration_seconds REAL,
-                processed BOOLEAN DEFAULT FALSE,
-                face_count INTEGER DEFAULT 0,
-                object_count INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Create face detections table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS face_detections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                motion_event_id INTEGER,
-                frame_timestamp TIMESTAMP,
-                face_crop BLOB,
-                face_embedding BLOB,
-                confidence REAL,
-                bbox_x INTEGER,
-                bbox_y INTEGER,
-                bbox_width INTEGER,
-                bbox_height INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
-            )
-        ''')
-
-        # Create object detections table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS object_detections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                motion_event_id INTEGER,
-                frame_timestamp TIMESTAMP,
-                class_name TEXT,
-                confidence REAL,
-                bbox_x INTEGER,
-                bbox_y INTEGER,
-                bbox_width INTEGER,
-                bbox_height INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
-            )
-        ''')
-
-        conn.commit()
-        conn.close()
-        logger.info(f"Database initialized: {self.db_path}")
-    
-    
-    def store_motion_event(self, segment: VideoSegment):
-        """Store motion event in database."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        duration = (segment.end_time - segment.start_time).total_seconds()
-        
-        cursor.execute('''
-            INSERT INTO motion_events 
-            (start_time, end_time, video_file, duration_seconds, processed)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (segment.start_time, segment.end_time, segment.file_path, 
-              duration, segment.processed))
-        
-        conn.commit()
-        conn.close()
-
-
-
-    def store_object_detection(self, motion_event_id: int, frame_time: datetime,
-                               class_name: str, confidence: float,
-                               x: int, y: int, w: int, h: int):
-        """Store object detection in database."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute('''
-            INSERT INTO object_detections
-            (motion_event_id, frame_timestamp, class_name, confidence,
-             bbox_x, bbox_y, bbox_width, bbox_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (motion_event_id, frame_time, class_name, confidence,
-              x, y, w, h))
-
-        conn.commit()
-        conn.close()
 
     def start_recording(self, trigger_time: datetime) -> str:
         """Start recording a motion-triggered video segment."""
@@ -292,20 +190,13 @@ class MotionTriggeredProcessor:
         logger.info(f"Processing video: {segment.file_path}")
 
         # Get motion event ID from database
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id FROM motion_events
-            WHERE video_file = ?
-        ''', (segment.file_path,))
-        result = cursor.fetchone()
-        conn.close()
+        motion_event_data = self.db_manager.get_motion_event_by_video_file(segment.file_path)
 
-        if not result:
+        if not motion_event_data:
             logger.error(f"Motion event not found in database for: {segment.file_path}")
             return
 
-        motion_event_id = result[0]
+        motion_event_id, _ = motion_event_data
 
         # Open video file
         cap = cv2.VideoCapture(segment.file_path)
@@ -343,15 +234,7 @@ class MotionTriggeredProcessor:
         cap.release()
 
         # Update motion event with counts
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE motion_events
-            SET processed = ?, face_count = ?, object_count = ?
-            WHERE id = ?
-        ''', (True, total_faces, total_objects, motion_event_id))
-        conn.commit()
-        conn.close()
+        self.db_manager.update_motion_event_counts(motion_event_id, total_faces, total_objects)
 
         logger.info(f"Processed video: {segment.file_path} - Found {total_faces} faces in {len(person_bboxes) if person_bboxes else 0} person detections, {total_objects} total objects")
 

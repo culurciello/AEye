@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import os
 import logging
-import sqlite3
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Tuple, Optional, List
@@ -71,11 +70,12 @@ class CircularVideoBuffer:
 
 
 class VideoProcessor:
-    def __init__(self, videos_dir: str, fps: int, pre_motion_seconds: int = 30, post_motion_seconds: int = 30):
+    def __init__(self, videos_dir: str, fps: int, pre_motion_seconds: int = 30, post_motion_seconds: int = 30, db_manager=None):
         self.videos_dir = videos_dir
         self.fps = fps
         self.pre_motion_seconds = pre_motion_seconds
         self.post_motion_seconds = post_motion_seconds
+        self.db_manager = db_manager
         self.video_buffer = CircularVideoBuffer(60, fps)
         self.is_recording = False
         self.current_recording_path = None
@@ -199,7 +199,8 @@ class VideoProcessor:
         )
         
         # Store in database
-        self.store_motion_event(segment)
+        if self.db_manager:
+            self.db_manager.store_motion_event(segment)
         
         logger.info(f"Stopped recording: {self.current_recording_path}")
         self.current_recording_path = None

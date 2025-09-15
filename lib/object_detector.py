@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import logging
-import sqlite3
 from datetime import datetime
 from typing import Optional
 
@@ -16,8 +15,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 class ObjectDetector:
-    def __init__(self, db_path: str = "data/db/detections.db"):
-        self.db_path = db_path
+    def __init__(self, db_manager):
+        self.db_manager = db_manager
         self.yolo_model = None
 
     def init_yolo_detector(self):
@@ -85,7 +84,7 @@ class ObjectDetector:
                             continue
 
                         # Store in database
-                        self.store_object_detection(
+                        self.db_manager.store_object_detection(
                             motion_event_id, frame_time, class_name, confidence,
                             bbox_x, bbox_y, bbox_w, bbox_h
                         )
@@ -105,20 +104,3 @@ class ObjectDetector:
             logger.error(f"Error detecting objects: {e}")
             return 0, []
 
-    def store_object_detection(self, motion_event_id: int, frame_time: datetime,
-                               class_name: str, confidence: float,
-                               x: int, y: int, w: int, h: int):
-        """Store object detection in database."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute('''
-            INSERT INTO object_detections
-            (motion_event_id, frame_timestamp, class_name, confidence,
-             bbox_x, bbox_y, bbox_width, bbox_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (motion_event_id, frame_time, class_name, confidence,
-              x, y, w, h))
-
-        conn.commit()
-        conn.close()

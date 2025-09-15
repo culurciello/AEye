@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
 import logging
-import sqlite3
-import pickle
 from datetime import datetime
 from typing import Optional
 from insightface.app import FaceAnalysis
@@ -10,9 +8,9 @@ from insightface.app import FaceAnalysis
 logger = logging.getLogger(__name__)
 
 class FaceDetector:
-    def __init__(self, use_gpu: bool = True, db_path: str = "data/db/detections.db"):
+    def __init__(self, use_gpu: bool = True, db_manager=None):
         self.use_gpu = use_gpu
-        self.db_path = db_path
+        self.db_manager = db_manager
         self.face_app = None
 
     def init_face_detector(self):
@@ -85,10 +83,11 @@ class FaceDetector:
                     embedding = embedding / norm
 
                 # Store in database
-                self.store_face_detection(
-                    motion_event_id, frame_time, face_bytes, embedding,
-                    confidence, x1, y1, bbox_w, bbox_h
-                )
+                if self.db_manager:
+                    self.db_manager.store_face_detection(
+                        motion_event_id, frame_time, face_bytes, embedding,
+                        confidence, x1, y1, bbox_w, bbox_h
+                    )
 
                 face_count += 1
 
@@ -165,10 +164,11 @@ class FaceDetector:
                         embedding = embedding / norm
 
                     # Store in database with full frame coordinates
-                    self.store_face_detection(
-                        motion_event_id, frame_time, face_bytes, embedding,
-                        confidence, full_frame_x1, full_frame_y1, bbox_w, bbox_h
-                    )
+                    if self.db_manager:
+                        self.db_manager.store_face_detection(
+                            motion_event_id, frame_time, face_bytes, embedding,
+                            confidence, full_frame_x1, full_frame_y1, bbox_w, bbox_h
+                        )
 
                     total_face_count += 1
 
@@ -178,22 +178,3 @@ class FaceDetector:
             logger.error(f"Error detecting faces in person crops: {e}")
             return 0
     
-    def store_face_detection(self, motion_event_id: int, frame_time: datetime,
-                           face_bytes: bytes, embedding: np.ndarray, confidence: float,
-                           x: int, y: int, w: int, h: int):
-        """Store face detection in database."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-    
-        embedding_bytes = pickle.dumps(embedding)
-    
-        cursor.execute('''
-            INSERT INTO face_detections
-            (motion_event_id, frame_timestamp, face_crop, face_embedding, confidence,
-             bbox_x, bbox_y, bbox_width, bbox_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (motion_event_id, frame_time, face_bytes, embedding_bytes, confidence,
-              x, y, w, h))
-    
-        conn.commit()
-        conn.close()
