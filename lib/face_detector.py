@@ -48,54 +48,134 @@ class FaceDetector:
     def detect_faces_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
         """Detect faces in a single frame and store results."""
         if not self.face_app:
-            return []
-    
+            return 0
+
         try:
             faces = self.face_app.get(frame)
             face_count = 0
-    
+
             for face in faces:
                 bbox = face.bbox.astype(int)
                 confidence = face.det_score
-    
+
                 # Skip low confidence detections
                 if confidence < 0.7:
                     continue
-    
+
                 x1, y1, x2, y2 = bbox
                 bbox_w = x2 - x1
                 bbox_h = y2 - y1
-    
+
                 # Skip very small faces
                 if bbox_w < 30 or bbox_h < 30:
                     continue
-    
+
                 # Extract face crop
                 face_crop = frame[y1:y2, x1:x2]
-    
+
                 # Convert to bytes
                 encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
                 _, face_buffer = cv2.imencode('.jpg', face_crop, encode_param)
                 face_bytes = face_buffer.tobytes()
-    
+
                 # Get normalized embedding
                 embedding = face.embedding
                 norm = np.linalg.norm(embedding)
                 if norm > 0:
                     embedding = embedding / norm
-    
+
                 # Store in database
                 self.store_face_detection(
                     motion_event_id, frame_time, face_bytes, embedding,
                     confidence, x1, y1, bbox_w, bbox_h
                 )
-    
+
                 face_count += 1
-    
+
             return face_count
-    
+
         except Exception as e:
             logger.error(f"Error detecting faces: {e}")
+            return 0
+
+    def detect_faces_in_person_crops(self, frame: np.ndarray, person_bboxes: list, frame_time: datetime, motion_event_id: int):
+        """Detect faces within person bounding boxes and store results."""
+        if not self.face_app or not person_bboxes:
+            return 0
+
+        total_face_count = 0
+
+        try:
+            for person_data in person_bboxes:
+                bbox_x, bbox_y, bbox_w, bbox_h = person_data['bbox']
+
+                # Add some padding to the person crop for better face detection
+                padding = 20
+                crop_x1 = max(0, bbox_x - padding)
+                crop_y1 = max(0, bbox_y - padding)
+                crop_x2 = min(frame.shape[1], bbox_x + bbox_w + padding)
+                crop_y2 = min(frame.shape[0], bbox_y + bbox_h + padding)
+
+                # Extract person crop
+                person_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+
+                # Skip if crop is too small
+                if person_crop.shape[0] < 60 or person_crop.shape[1] < 60:
+                    continue
+
+                # Run face detection on the person crop
+                faces = self.face_app.get(person_crop)
+
+                for face in faces:
+                    bbox = face.bbox.astype(int)
+                    confidence = face.det_score
+
+                    # Skip low confidence detections
+                    if confidence < 0.7:
+                        continue
+
+                    # Adjust face coordinates to full frame coordinates
+                    face_x1, face_y1, face_x2, face_y2 = bbox
+
+                    # Convert crop coordinates back to full frame coordinates
+                    full_frame_x1 = face_x1 + crop_x1
+                    full_frame_y1 = face_y1 + crop_y1
+                    full_frame_x2 = face_x2 + crop_x1
+                    full_frame_y2 = face_y2 + crop_y1
+
+                    bbox_w = full_frame_x2 - full_frame_x1
+                    bbox_h = full_frame_y2 - full_frame_y1
+
+                    # Skip very small faces
+                    if bbox_w < 30 or bbox_h < 30:
+                        continue
+
+                    # Extract face crop from original frame
+                    face_crop = frame[full_frame_y1:full_frame_y2, full_frame_x1:full_frame_x2]
+
+                    # Convert to bytes
+                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+                    _, face_buffer = cv2.imencode('.jpg', face_crop, encode_param)
+                    face_bytes = face_buffer.tobytes()
+
+                    # Get normalized embedding
+                    embedding = face.embedding
+                    norm = np.linalg.norm(embedding)
+                    if norm > 0:
+                        embedding = embedding / norm
+
+                    # Store in database with full frame coordinates
+                    self.store_face_detection(
+                        motion_event_id, frame_time, face_bytes, embedding,
+                        confidence, full_frame_x1, full_frame_y1, bbox_w, bbox_h
+                    )
+
+                    total_face_count += 1
+
+            return total_face_count
+
+        except Exception as e:
+            logger.error(f"Error detecting faces in person crops: {e}")
             return 0
     
     def store_face_detection(self, motion_event_id: int, frame_time: datetime,

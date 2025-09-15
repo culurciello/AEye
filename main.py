@@ -24,7 +24,7 @@ except ImportError:
 
 # Import our existing motion detection
 from lib.motion_detector import AdaptiveMotionDetector
-from lib.object_detector import ObjectDetector, YOLO_AVAILABLE, YOLO
+from lib.object_detector import ObjectDetector
 from lib.video_processor import CircularVideoBuffer, VideoSegment, VideoProcessor
 from lib.face_detector import FaceDetector
 
@@ -100,11 +100,9 @@ class MotionTriggeredProcessor:
         self.object_detector.init_yolo_detector()
         self.yolo_model = self.object_detector.yolo_model
 
-        # Initialize face detection (COMMENTED OUT FOR TESTING)
-        # self.face_detector = FaceDetector(self.use_gpu, self.db_path)
-        # self.face_detector.init_face_detector()
-        self.face_detector = None
-        self.face_app = None
+        # Initialize face detection
+        self.face_detector = FaceDetector(self.use_gpu, self.db_path)
+        self.face_detector.init_face_detector()
 
         # Initialize database
         self.init_database()
@@ -278,6 +276,84 @@ class MotionTriggeredProcessor:
     def detect_objects_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
         """Detect objects in a single frame using YOLO and store results."""
         return self.object_detector.detect_objects_in_frame(frame, frame_time, motion_event_id)
+
+    def detect_faces_in_person_crops(self, frame: np.ndarray, person_bboxes: list, frame_time: datetime, motion_event_id: int):
+        """Detect faces within person bounding boxes."""
+        if self.face_detector:
+            return self.face_detector.detect_faces_in_person_crops(frame, person_bboxes, frame_time, motion_event_id)
+        return 0
+
+    def process_recorded_video(self, segment: VideoSegment):
+        """Process a recorded video with person-triggered face detection."""
+        if not os.path.exists(segment.file_path):
+            logger.error(f"Video file not found: {segment.file_path}")
+            return
+
+        logger.info(f"Processing video: {segment.file_path}")
+
+        # Get motion event ID from database
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id FROM motion_events
+            WHERE video_file = ?
+        ''', (segment.file_path,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            logger.error(f"Motion event not found in database for: {segment.file_path}")
+            return
+
+        motion_event_id = result[0]
+
+        # Open video file
+        cap = cv2.VideoCapture(segment.file_path)
+        if not cap.isOpened():
+            logger.error(f"Could not open video: {segment.file_path}")
+            return
+
+        frame_count = 0
+        total_faces = 0
+        total_objects = 0
+        fps = cap.get(cv2.CAP_PROP_FPS) or self.fps
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frame_count += 1
+
+            # Process every 15th frame to reduce computational load
+            if frame_count % 15 == 0:
+                frame_time = segment.start_time + timedelta(seconds=frame_count / fps)
+
+                # Object detection - now returns person bboxes too
+                objects_detected, person_bboxes = self.detect_objects_in_frame(frame, frame_time, motion_event_id)
+                total_objects += objects_detected
+
+                # Person-triggered face detection - only run if persons detected
+                if person_bboxes and self.face_detector:
+                    faces_detected = self.detect_faces_in_person_crops(frame, person_bboxes, frame_time, motion_event_id)
+                    total_faces += faces_detected
+                    if faces_detected > 0:
+                        logger.debug(f"Detected {faces_detected} faces in {len(person_bboxes)} person crops")
+
+        cap.release()
+
+        # Update motion event with counts
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE motion_events
+            SET processed = ?, face_count = ?, object_count = ?
+            WHERE id = ?
+        ''', (True, total_faces, total_objects, motion_event_id))
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Processed video: {segment.file_path} - Found {total_faces} faces in {len(person_bboxes) if person_bboxes else 0} person detections, {total_objects} total objects")
 
     def start_processing_thread(self):
         """Start background thread for processing recorded videos."""
@@ -493,7 +569,7 @@ def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('aeye.log')
+            logging.FileHandler('data/aeye.log')
         ]
     )
     

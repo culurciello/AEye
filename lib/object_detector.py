@@ -51,12 +51,13 @@ class ObjectDetector:
     def detect_objects_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
         """Detect objects in a single frame using YOLO and store results."""
         if not self.yolo_model:
-            return 0
+            return 0, []
 
         try:
             # Run YOLO inference
             results = self.yolo_model(frame, verbose=False)
             object_count = 0
+            person_bboxes = []
 
             # Process results
             for result in results:
@@ -91,11 +92,18 @@ class ObjectDetector:
 
                         object_count += 1
 
-            return object_count
+                        # If this is a person, save the bounding box for face detection
+                        if class_name.lower() == 'person':
+                            person_bboxes.append({
+                                'bbox': (bbox_x, bbox_y, bbox_w, bbox_h),
+                                'confidence': confidence
+                            })
+
+            return object_count, person_bboxes
 
         except Exception as e:
             logger.error(f"Error detecting objects: {e}")
-            return 0
+            return 0, []
 
     def store_object_detection(self, motion_event_id: int, frame_time: datetime,
                                class_name: str, confidence: float,
