@@ -22,73 +22,16 @@ except ImportError:
     YOLO_AVAILABLE = False
     print("Warning: ultralytics not available. Install with: pip install ultralytics")
 
-# COMMENTED OUT FOR TESTING - Face detection
-# from insightface.app import FaceAnalysis
-
 # Import our existing motion detection
-from motion_detection import AdaptiveMotionDetector
+from lib.motion_detector import AdaptiveMotionDetector
+from lib.object_detector import ObjectDetector, YOLO_AVAILABLE, YOLO
+from lib.video_processor import CircularVideoBuffer, VideoSegment, VideoProcessor
+from lib.face_detector import FaceDetector
+
 
 # Setup logger
 logger = logging.getLogger(__name__)
 
-@dataclass
-class VideoSegment:
-    """Represents a video segment with motion data."""
-    start_time: datetime
-    end_time: datetime
-    file_path: str
-    motion_detected: bool
-    processed: bool = False
-    detection_count: int = 0
-
-class CircularVideoBuffer:
-    """Maintains a circular buffer of video frames for pre/post motion recording."""
-    
-    def __init__(self, buffer_duration: int = 60, fps: int = 30):
-        """
-        Initialize circular buffer.
-        
-        Args:
-            buffer_duration: Buffer duration in seconds
-            fps: Frames per second
-        """
-        self.buffer_duration = buffer_duration
-        self.fps = fps
-        self.max_frames = buffer_duration * fps
-        self.frames = deque(maxlen=self.max_frames)
-        self.timestamps = deque(maxlen=self.max_frames)
-        
-    def add_frame(self, frame: np.ndarray, timestamp: datetime):
-        """Add a frame to the circular buffer."""
-        self.frames.append(frame.copy())
-        self.timestamps.append(timestamp)
-    
-    def get_frames_around_time(self, trigger_time: datetime, 
-                              before_seconds: int = 30, 
-                              after_seconds: int = 30) -> List[Tuple[np.ndarray, datetime]]:
-        """
-        Get frames around a specific trigger time.
-        
-        Args:
-            trigger_time: The trigger timestamp
-            before_seconds: Seconds before trigger
-            after_seconds: Seconds after trigger
-            
-        Returns:
-            List of (frame, timestamp) tuples
-        """
-        if not self.timestamps:
-            return []
-        
-        start_time = trigger_time - timedelta(seconds=before_seconds)
-        end_time = trigger_time + timedelta(seconds=after_seconds)
-        
-        selected_frames = []
-        for frame, timestamp in zip(self.frames, self.timestamps):
-            if start_time <= timestamp <= end_time:
-                selected_frames.append((frame, timestamp))
-        
-        return selected_frames
 
 class MotionTriggeredProcessor:
     """
@@ -151,19 +94,30 @@ class MotionTriggeredProcessor:
         self._warmup_motion_detector()
         
         self.video_buffer = CircularVideoBuffer(buffer_duration, fps)
-        
-        # Initialize YOLO object detection
-        self.init_yolo_detector()
+
+        # Initialize object detection
+        self.object_detector = ObjectDetector(self.db_path)
+        self.object_detector.init_yolo_detector()
+        self.yolo_model = self.object_detector.yolo_model
 
         # Initialize face detection (COMMENTED OUT FOR TESTING)
-        # self.init_face_detector()
+        # self.face_detector = FaceDetector(self.use_gpu, self.db_path)
+        # self.face_detector.init_face_detector()
+        self.face_detector = None
         self.face_app = None
 
         # Initialize database
         self.init_database()
-        
+
+        # Initialize video processor
+        self.video_processor = VideoProcessor(self.videos_dir, self.fps, self.pre_motion_seconds, self.post_motion_seconds)
+        self.video_processor.video_buffer = self.video_buffer
+
+        # Bind methods to video processor that need access to main class
+        self.video_processor.store_motion_event = self.store_motion_event
+
         # Pre-initialize video codec
-        self._warmup_video_writer()
+        self.video_processor._warmup_video_writer()
         
         # Motion state tracking
         self.motion_active = False
@@ -191,35 +145,6 @@ class MotionTriggeredProcessor:
         daily_dir = os.path.join(base_dir, date_str)
         os.makedirs(daily_dir, exist_ok=True)
         return daily_dir
-        
-    # COMMENTED OUT FOR TESTING - Face detector initialization causing delays
-    # def init_face_detector(self):
-    #     """Initialize and warm up face detection using InsightFace."""
-    #     try:
-    #         logger.info("Initializing InsightFace neural networks...")
-    #         self.face_app = FaceAnalysis(allowed_modules=['detection', 'recognition'])
-    #         ctx_id = 0 if self.use_gpu else -1
-    #         self.face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
-    #
-    #         # Warm up the neural network with dummy data
-    #         logger.info("Warming up face detection neural networks...")
-    #         dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    #         dummy_frame.fill(128)  # Fill with gray color
-    #
-    #         # Add some noise to make it more realistic
-    #         noise = np.random.randint(0, 50, dummy_frame.shape, dtype=np.uint8)
-    #         dummy_frame = cv2.add(dummy_frame, noise)
-    #
-    #         # Run several warm-up inferences
-    #         for i in range(3):
-    #             _ = self.face_app.get(dummy_frame)
-    #             logger.debug(f"Face detection warm-up iteration {i+1}/3 completed")
-    #
-    #         logger.info(f"InsightFace initialized and warmed up (ctx_id: {ctx_id})")
-    #
-    #     except Exception as e:
-    #         logger.error(f"Failed to initialize face detection: {e}")
-    #         self.face_app = None
     
     def _warmup_motion_detector(self):
         """Warm up motion detection with dummy frames."""
@@ -244,69 +169,6 @@ class MotionTriggeredProcessor:
             
         logger.info("Motion detection warm-up completed")
 
-    def init_yolo_detector(self):
-        """Initialize YOLO object detection model."""
-        if not YOLO_AVAILABLE:
-            logger.warning("YOLO not available - object detection disabled")
-            self.yolo_model = None
-            return
-
-        try:
-            logger.info("Initializing YOLO object detection...")
-            # Use YOLOv8n (nano) for speed, or YOLOv8s/m/l/x for better accuracy
-            self.yolo_model = YOLO('models/yolov8n.pt')
-
-            # Warm up the model
-            logger.info("Warming up YOLO model...")
-            dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)
-            dummy_frame.fill(128)
-
-            # Run a few warm-up inferences
-            for i in range(3):
-                _ = self.yolo_model(dummy_frame, verbose=False)
-                logger.debug(f"YOLO warm-up iteration {i+1}/3 completed")
-
-            logger.info("YOLO object detection initialized and warmed up")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize YOLO: {e}")
-            self.yolo_model = None
-
-    def _warmup_video_writer(self):
-        """Pre-initialize video codec and writer to avoid delays during recording."""
-        logger.info("Warming up video writer...")
-        
-        try:
-            # Create a temporary test video file
-            test_path = os.path.join(self.videos_dir, "test_warmup.mp4")
-            
-            # Default resolution for warmup
-            width, height = 640, 480
-            
-            # Initialize video writer with the same settings we'll use for recording
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            test_writer = cv2.VideoWriter(test_path, fourcc, self.fps, (width, height))
-            
-            if test_writer.isOpened():
-                # Write a few dummy frames to initialize the codec
-                dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
-                dummy_frame.fill(128)
-                
-                for i in range(5):
-                    test_writer.write(dummy_frame)
-                
-                test_writer.release()
-                
-                # Clean up test file
-                if os.path.exists(test_path):
-                    os.remove(test_path)
-                
-                logger.info("Video writer warm-up completed")
-            else:
-                logger.warning("Could not initialize video writer during warm-up")
-                
-        except Exception as e:
-            logger.warning(f"Video writer warm-up failed: {e}")
     
     def init_database(self):
         """Initialize database for storing motion and face detections."""
@@ -367,85 +229,6 @@ class MotionTriggeredProcessor:
         conn.close()
         logger.info(f"Database initialized: {self.db_path}")
     
-    def start_recording(self, trigger_time: datetime) -> str:
-        """Start recording a motion-triggered video segment."""
-        # Get daily directory for videos
-        daily_video_dir = self.get_daily_directory(self.videos_dir, trigger_time)
-
-        timestamp_str = trigger_time.strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp_str}.mp4"
-        file_path = os.path.join(daily_video_dir, filename)
-        
-        # Get frame dimensions from buffer if available
-        if self.video_buffer.frames:
-            height, width = self.video_buffer.frames[-1].shape[:2]
-        else:
-            # Default resolution
-            width, height = 1280, 720
-        
-        # Initialize video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        self.recording_writer = cv2.VideoWriter(file_path, fourcc, self.fps, (width, height))
-
-        if not self.recording_writer.isOpened():
-            logger.error(f"Failed to open video writer for {file_path}")
-            return None
-
-        self.current_recording_path = file_path
-        self.recording_frame_size = (height, width)  # Store frame dimensions
-        self.is_recording = True
-        
-        # Write pre-motion frames from buffer
-        frames_around = self.video_buffer.get_frames_around_time(
-            trigger_time, 
-            self.pre_motion_seconds, 
-            0  # Don't get post frames yet
-        )
-        
-        for frame, _ in frames_around:
-            if frame.shape[:2] == self.recording_frame_size:
-                self.recording_writer.write(frame)
-        
-        logger.info(f"Started recording: {file_path}")
-        return file_path
-    
-    def stop_recording(self, end_time: datetime, start_time: datetime) -> Optional[VideoSegment]:
-        """Stop recording and create video segment metadata."""
-        if not self.is_recording or not self.recording_writer:
-            return None
-        
-        # Write post-motion frames from buffer
-        frames_around = self.video_buffer.get_frames_around_time(
-            end_time, 
-            0,  # Don't get pre frames again
-            self.post_motion_seconds
-        )
-        
-        for frame, _ in frames_around:
-            if self.recording_writer and hasattr(self, 'recording_frame_size') and frame.shape[:2] == self.recording_frame_size:
-                self.recording_writer.write(frame)
-        
-        # Close video writer
-        self.recording_writer.release()
-        self.recording_writer = None
-        self.is_recording = False
-        
-        # Create video segment
-        segment = VideoSegment(
-            start_time=start_time,
-            end_time=end_time,
-            file_path=self.current_recording_path,
-            motion_detected=True,
-            processed=False
-        )
-        
-        # Store in database
-        self.store_motion_event(segment)
-        
-        logger.info(f"Stopped recording: {self.current_recording_path}")
-        self.current_recording_path = None
-        
-        return segment
     
     def store_motion_event(self, segment: VideoSegment):
         """Store motion event in database."""
@@ -463,130 +246,8 @@ class MotionTriggeredProcessor:
         
         conn.commit()
         conn.close()
-    
-    # COMMENTED OUT FOR TESTING - Face detection causing delays
-    # def detect_faces_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
-    #     """Detect faces in a single frame and store results."""
-    #     if not self.face_app:
-    #         return []
-    #
-    #     try:
-    #         faces = self.face_app.get(frame)
-    #         face_count = 0
-    #
-    #         for face in faces:
-    #             bbox = face.bbox.astype(int)
-    #             confidence = face.det_score
-    #
-    #             # Skip low confidence detections
-    #             if confidence < 0.7:
-    #                 continue
-    #
-    #             x1, y1, x2, y2 = bbox
-    #             bbox_w = x2 - x1
-    #             bbox_h = y2 - y1
-    #
-    #             # Skip very small faces
-    #             if bbox_w < 30 or bbox_h < 30:
-    #                 continue
-    #
-    #             # Extract face crop
-    #             face_crop = frame[y1:y2, x1:x2]
-    #
-    #             # Convert to bytes
-    #             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-    #             _, face_buffer = cv2.imencode('.jpg', face_crop, encode_param)
-    #             face_bytes = face_buffer.tobytes()
-    #
-    #             # Get normalized embedding
-    #             embedding = face.embedding
-    #             norm = np.linalg.norm(embedding)
-    #             if norm > 0:
-    #                 embedding = embedding / norm
-    #
-    #             # Store in database
-    #             self.store_face_detection(
-    #                 motion_event_id, frame_time, face_bytes, embedding,
-    #                 confidence, x1, y1, bbox_w, bbox_h
-    #             )
-    #
-    #             face_count += 1
-    #
-    #         return face_count
-    #
-    #     except Exception as e:
-    #         logger.error(f"Error detecting faces: {e}")
-    #         return 0
-    
-    # COMMENTED OUT FOR TESTING - Face detection causing delays
-    # def store_face_detection(self, motion_event_id: int, frame_time: datetime,
-    #                        face_bytes: bytes, embedding: np.ndarray, confidence: float,
-    #                        x: int, y: int, w: int, h: int):
-    #     """Store face detection in database."""
-    #     conn = sqlite3.connect(self.db_path)
-    #     cursor = conn.cursor()
-    #
-    #     embedding_bytes = pickle.dumps(embedding)
-    #
-    #     cursor.execute('''
-    #         INSERT INTO face_detections
-    #         (motion_event_id, frame_timestamp, face_crop, face_embedding, confidence,
-    #          bbox_x, bbox_y, bbox_width, bbox_height)
-    #         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    #     ''', (motion_event_id, frame_time, face_bytes, embedding_bytes, confidence,
-    #           x, y, w, h))
-    #
-    #     conn.commit()
-    #     conn.close()
 
-    def detect_objects_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
-        """Detect objects in a single frame using YOLO and store results."""
-        if not self.yolo_model:
-            return []
 
-        try:
-            # Run YOLO inference
-            results = self.yolo_model(frame, verbose=False)
-            object_count = 0
-
-            # Process results
-            for result in results:
-                boxes = result.boxes
-                if boxes is not None:
-                    for box in boxes:
-                        # Get confidence and class
-                        confidence = float(box.conf[0])
-                        class_id = int(box.cls[0])
-                        class_name = self.yolo_model.names[class_id]
-
-                        # Skip low confidence detections
-                        if confidence < 0.5:
-                            continue
-
-                        # Get bounding box coordinates
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        bbox_x = int(x1)
-                        bbox_y = int(y1)
-                        bbox_w = int(x2 - x1)
-                        bbox_h = int(y2 - y1)
-
-                        # Skip very small objects
-                        if bbox_w < 20 or bbox_h < 20:
-                            continue
-
-                        # Store in database
-                        self.store_object_detection(
-                            motion_event_id, frame_time, class_name, confidence,
-                            bbox_x, bbox_y, bbox_w, bbox_h
-                        )
-
-                        object_count += 1
-
-            return object_count
-
-        except Exception as e:
-            logger.error(f"Error detecting objects: {e}")
-            return 0
 
     def store_object_detection(self, motion_event_id: int, frame_time: datetime,
                                class_name: str, confidence: float,
@@ -606,75 +267,18 @@ class MotionTriggeredProcessor:
         conn.commit()
         conn.close()
 
-    def process_recorded_video(self, segment: VideoSegment):
-        """Process a recorded video for face detection."""
-        if not os.path.exists(segment.file_path):
-            logger.error(f"Video file not found: {segment.file_path}")
-            return
-        
-        logger.info(f"Processing video: {segment.file_path}")
-        
-        # Get motion event ID from database
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id FROM motion_events 
-            WHERE video_file = ?
-        ''', (segment.file_path,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if not result:
-            logger.error(f"Motion event not found in database for: {segment.file_path}")
-            return
-        
-        motion_event_id = result[0]
-        
-        # Open video file
-        cap = cv2.VideoCapture(segment.file_path)
-        if not cap.isOpened():
-            logger.error(f"Could not open video: {segment.file_path}")
-            return
-        
-        frame_count = 0
-        total_faces = 0
-        total_objects = 0
-        fps = cap.get(cv2.CAP_PROP_FPS) or self.fps
+    def start_recording(self, trigger_time: datetime) -> str:
+        """Start recording a motion-triggered video segment."""
+        return self.video_processor.start_recording(trigger_time)
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+    def stop_recording(self, end_time: datetime, start_time: datetime):
+        """Stop recording and create video segment metadata."""
+        return self.video_processor.stop_recording(end_time, start_time)
 
-            frame_count += 1
+    def detect_objects_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
+        """Detect objects in a single frame using YOLO and store results."""
+        return self.object_detector.detect_objects_in_frame(frame, frame_time, motion_event_id)
 
-            # Process every 15th frame to reduce computational load
-            if frame_count % 15 == 0:
-                frame_time = segment.start_time + timedelta(seconds=frame_count / fps)
-
-                # COMMENTED OUT FOR TESTING - Face detection causing delays
-                # faces_detected = self.detect_faces_in_frame(frame, frame_time, motion_event_id)
-                # total_faces += faces_detected
-
-                # Object detection
-                objects_detected = self.detect_objects_in_frame(frame, frame_time, motion_event_id)
-                total_objects += objects_detected
-
-        cap.release()
-
-        # Update motion event with counts
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE motion_events
-            SET processed = ?, face_count = ?, object_count = ?
-            WHERE id = ?
-        ''', (True, total_faces, total_objects, motion_event_id))
-        conn.commit()
-        conn.close()
-
-        logger.info(f"Processed video: {segment.file_path} - Found {total_faces} faces, {total_objects} objects")
-    
     def start_processing_thread(self):
         """Start background thread for processing recorded videos."""
         if self.processing_thread and self.processing_thread.is_alive():
@@ -761,7 +365,8 @@ class MotionTriggeredProcessor:
                         # Motion started
                         self.motion_active = True
                         self.motion_start_time = current_time
-                        self.start_recording(current_time)
+                        self.current_recording_path = self.start_recording(current_time)
+                        self.is_recording = True
 
                         # Run object detection on first motion frame to log what's detected
                         if self.yolo_model:
@@ -791,8 +396,8 @@ class MotionTriggeredProcessor:
                     self.last_motion_time = current_time
 
                     # Continue recording
-                    if self.is_recording and self.recording_writer:
-                        self.recording_writer.write(frame)
+                    if self.is_recording and self.video_processor.recording_writer:
+                        self.video_processor.recording_writer.write(frame)
                 
                 else:
                     # No motion detected
@@ -804,14 +409,15 @@ class MotionTriggeredProcessor:
                             # Motion ended
                             self.motion_active = False
                             segment = self.stop_recording(current_time, self.motion_start_time)
-                            
+                            self.is_recording = False
+
                             if segment:
                                 self.processing_queue.append(segment)
                                 logger.info("Motion ended - Recording queued for processing")
-                    
+
                     # Continue recording for a bit after motion stops
-                    if self.is_recording and self.recording_writer:
-                        self.recording_writer.write(frame)
+                    if self.is_recording and self.video_processor.recording_writer:
+                        self.video_processor.recording_writer.write(frame)
                 
                 # Create visualization
                 output_frame = self.motion_detector.visualize_results(
@@ -844,6 +450,7 @@ class MotionTriggeredProcessor:
             # Cleanup
             if self.is_recording:
                 segment = self.stop_recording(datetime.now(), self.motion_start_time)
+                self.is_recording = False
                 if segment:
                     self.processing_queue.append(segment)
             
@@ -886,7 +493,7 @@ def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('motion_processor.log')
+            logging.FileHandler('aeye.log')
         ]
     )
     
