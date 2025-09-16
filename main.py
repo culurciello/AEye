@@ -38,7 +38,8 @@ class MotionTriggeredProcessor:
                  post_motion_seconds: int = 60,
                  fps: int = 30,
                  use_gpu: bool = True,
-                 image_capture_interval: int = 600):  # 10 minutes in seconds
+                 image_capture_interval: int = 600,  # 10 minutes in seconds
+                 headless: bool = False):
         """
         Initialize the motion triggered processor.
 
@@ -53,6 +54,7 @@ class MotionTriggeredProcessor:
             fps: Target FPS for processing
             use_gpu: Whether to use GPU for face detection
             image_capture_interval: Seconds between periodic image captures (default: 600 = 10 minutes)
+            headless: Skip visualization and display for server/headless mode
         """
         self.video_source = video_source
         self.videos_dir = videos_dir
@@ -64,6 +66,7 @@ class MotionTriggeredProcessor:
         self.fps = fps
         self.use_gpu = use_gpu
         self.image_capture_interval = image_capture_interval
+        self.headless = headless
 
         # Create required directories
         os.makedirs(self.videos_dir, exist_ok=True)
@@ -273,26 +276,96 @@ class MotionTriggeredProcessor:
             logger.error(f"Error saving periodic image: {e}")
 
     def run(self):
-        """Main processing loop."""
-        # Initialize video capture
-        cap = cv2.VideoCapture(self.video_source)
-        if not cap.isOpened():
-            logger.error(f"Could not open video source: {self.video_source}")
+        """Main processing loop with camera reconnection handling."""
+        cap = None
+        camera_retry_count = 0
+        max_camera_retries = 10
+        camera_retry_delay = 5
+
+        # Initialize video capture with retry logic
+        while camera_retry_count < max_camera_retries:
+            try:
+                logger.info(f"Attempting to connect to video source: {self.video_source}")
+                cap = cv2.VideoCapture(self.video_source)
+
+                if cap.isOpened():
+                    # Test if we can actually read a frame
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None:
+                        logger.info("Camera connection successful")
+                        break
+                    else:
+                        logger.warning("Camera opened but cannot read frames")
+                        cap.release()
+                        cap = None
+
+                camera_retry_count += 1
+                if camera_retry_count < max_camera_retries:
+                    logger.warning(f"Camera connection failed, retrying in {camera_retry_delay}s (attempt {camera_retry_count}/{max_camera_retries})")
+                    time.sleep(camera_retry_delay)
+
+            except Exception as e:
+                logger.error(f"Camera connection error: {e}")
+                camera_retry_count += 1
+                if camera_retry_count < max_camera_retries:
+                    time.sleep(camera_retry_delay)
+
+        if not cap or not cap.isOpened():
+            logger.error(f"Failed to connect to camera after {max_camera_retries} attempts")
             return
         
         # Start processing thread
         self.start_processing_thread()
         
         logger.info("Motion-triggered processor started")
-        logger.info("Press 'q' to quit, 's' to save current frame")
+        if not self.headless:
+            logger.info("Press 'q' to quit, 's' to save current frame")
+        else:
+            logger.info("Running in headless mode - use Ctrl+C to quit")
         
         frame_count = 0
-        
+        failed_reads = 0
+        max_failed_reads = 30  # Allow 30 consecutive failed reads before reconnecting
+
         try:
             while True:
                 ret, frame = cap.read()
-                if not ret:
-                    break
+                if not ret or frame is None:
+                    failed_reads += 1
+                    logger.warning(f"Failed to read frame (attempt {failed_reads}/{max_failed_reads})")
+
+                    if failed_reads >= max_failed_reads:
+                        logger.error("Too many failed frame reads, attempting camera reconnection...")
+                        cap.release()
+
+                        # Attempt to reconnect
+                        reconnect_attempts = 0
+                        while reconnect_attempts < 5:
+                            time.sleep(5)  # Wait before reconnecting
+                            try:
+                                cap = cv2.VideoCapture(self.video_source)
+                                if cap.isOpened():
+                                    ret, test_frame = cap.read()
+                                    if ret and test_frame is not None:
+                                        logger.info("Camera reconnected successfully")
+                                        failed_reads = 0
+                                        break
+                                    else:
+                                        cap.release()
+                                reconnect_attempts += 1
+                                logger.warning(f"Reconnection attempt {reconnect_attempts}/5 failed")
+                            except Exception as e:
+                                logger.error(f"Reconnection error: {e}")
+                                reconnect_attempts += 1
+
+                        if reconnect_attempts >= 5:
+                            logger.error("Camera reconnection failed, exiting...")
+                            break
+                    else:
+                        time.sleep(0.1)  # Brief pause before retry
+                        continue
+                else:
+                    failed_reads = 0  # Reset counter on successful read
                 
                 frame_count += 1
                 current_time = datetime.now()
@@ -369,32 +442,34 @@ class MotionTriggeredProcessor:
                     if self.is_recording and self.video_processor.recording_writer:
                         self.video_processor.recording_writer.write(frame)
                 
-                # Create visualization
-                output_frame = self.motion_detector.visualize_results(
-                    frame, motion_mask, motion_regions, motion_detected
-                )
+                # Create visualization and display only if not in headless mode
+                if not self.headless:
+                    output_frame = self.motion_detector.visualize_results(
+                        frame, motion_mask, motion_regions, motion_detected
+                    )
+
+                    # Add recording indicator
+                    if self.is_recording:
+                        cv2.circle(output_frame, (output_frame.shape[1] - 30, 30), 10, (0, 0, 255), -1)
+                        cv2.putText(output_frame, "REC", (output_frame.shape[1] - 60, 40),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+                    # Display results
+                    cv2.imshow('Motion-Triggered Processor', output_frame)
                 
-                # Add recording indicator
-                if self.is_recording:
-                    cv2.circle(output_frame, (output_frame.shape[1] - 30, 30), 10, (0, 0, 255), -1)
-                    cv2.putText(output_frame, "REC", (output_frame.shape[1] - 60, 40), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                
-                # Display results
-                cv2.imshow('Motion-Triggered Processor', output_frame)
-                
-                # Handle key presses
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('s'):
-                    # Save current frame
-                    timestamp = int(time.time())
-                    cv2.imwrite(f'frame_{timestamp}.jpg', output_frame)
-                    logger.info(f"Frame saved as frame_{timestamp}.jpg")
-                
-                # Limit FPS
-                time.sleep(1.0 / self.fps)
+                # Handle key presses only if not in headless mode
+                if not self.headless:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        break
+                    elif key == ord('s'):
+                        # Save current frame
+                        timestamp = int(time.time())
+                        cv2.imwrite(f'frame_{timestamp}.jpg', output_frame)
+                        logger.info(f"Frame saved as frame_{timestamp}.jpg")
+                else:
+                    # In headless mode, add a small delay to prevent excessive CPU usage
+                    time.sleep(1.0 / self.fps)
         
         finally:
             # Cleanup
@@ -409,7 +484,8 @@ class MotionTriggeredProcessor:
                 self.processing_thread.join(timeout=5)
             
             cap.release()
-            cv2.destroyAllWindows()
+            if not self.headless:
+                cv2.destroyAllWindows()
             logger.info("Motion-triggered processor stopped")
 
 def main():
@@ -430,6 +506,8 @@ def main():
                        help='Disable GPU usage for face detection')
     parser.add_argument('--image-interval', type=int, default=600,
                        help='Seconds between periodic image captures (default: 600 = 10 minutes)')
+    parser.add_argument('--headless', action='store_true',
+                       help='Run in headless mode without video display (for servers)')
     parser.add_argument('--log-level',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO',
@@ -475,7 +553,8 @@ def main():
             post_motion_seconds=args.post_motion,
             fps=args.fps,
             use_gpu=not args.no_gpu,
-            image_capture_interval=args.image_interval
+            image_capture_interval=args.image_interval,
+            headless=args.headless
         )
         
         # Run processor

@@ -139,66 +139,66 @@ class FaceDetector:
         return best_match, best_similarity
 
 
+    # def detect_faces_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
+    #     """Detect faces in a single frame and store results."""
+    #     if not self.face_app:
+    #         return 0
 
-    def detect_faces_in_frame(self, frame: np.ndarray, frame_time: datetime, motion_event_id: int):
-        """Detect faces in a single frame and store results."""
-        if not self.face_app:
-            return 0
+    #     try:
+    #         faces = self.face_app.get(frame)
+    #         face_count = 0
 
-        try:
-            faces = self.face_app.get(frame)
-            face_count = 0
+    #         for face in faces:
+    #             bbox = face.bbox.astype(int)
+    #             confidence = face.det_score
 
-            for face in faces:
-                bbox = face.bbox.astype(int)
-                confidence = face.det_score
+    #             # Skip low confidence detections
+    #             if confidence < 0.7:
+    #                 continue
 
-                # Skip low confidence detections
-                if confidence < 0.7:
-                    continue
+    #             x1, y1, x2, y2 = bbox
+    #             bbox_w = x2 - x1
+    #             bbox_h = y2 - y1
 
-                x1, y1, x2, y2 = bbox
-                bbox_w = x2 - x1
-                bbox_h = y2 - y1
+    #             # Skip very small faces
+    #             if bbox_w < 30 or bbox_h < 30:
+    #                 continue
 
-                # Skip very small faces
-                if bbox_w < 30 or bbox_h < 30:
-                    continue
+    #             # Extract face crop
+    #             face_crop = frame[y1:y2, x1:x2]
 
-                # Extract face crop
-                face_crop = frame[y1:y2, x1:x2]
+    #             # Convert to bytes
+    #             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+    #             _, face_buffer = cv2.imencode('.jpg', face_crop, encode_param)
+    #             face_bytes = face_buffer.tobytes()
 
-                # Convert to bytes
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-                _, face_buffer = cv2.imencode('.jpg', face_crop, encode_param)
-                face_bytes = face_buffer.tobytes()
+    #             # Get normalized embedding
+    #             embedding = face.embedding
+    #             norm = np.linalg.norm(embedding)
+    #             if norm > 0:
+    #                 embedding = embedding / norm
 
-                # Get normalized embedding
-                embedding = face.embedding
-                norm = np.linalg.norm(embedding)
-                if norm > 0:
-                    embedding = embedding / norm
+    #             # Try to recognize the face
+    #             known_person, recognition_confidence = self.recognize_face(embedding)
 
-                # Try to recognize the face
-                known_person, recognition_confidence = self.recognize_face(embedding)
+    #             if known_person:
+    #                 logger.info(f"Recognized face: {known_person} (confidence: {recognition_confidence:.3f})")
 
-                if known_person:
-                    logger.info(f"Recognized face: {known_person} (confidence: {recognition_confidence:.3f})")
+    #             # Store in database
+    #             if self.db_manager:
+    #                 self.db_manager.store_face_detection(
+    #                     motion_event_id, frame_time, face_bytes, embedding,
+    #                     confidence, x1, y1, bbox_w, bbox_h, known_person, recognition_confidence
+    #                 )
 
-                # Store in database
-                if self.db_manager:
-                    self.db_manager.store_face_detection(
-                        motion_event_id, frame_time, face_bytes, embedding,
-                        confidence, x1, y1, bbox_w, bbox_h, known_person, recognition_confidence
-                    )
+    #             face_count += 1
 
-                face_count += 1
+    #         return face_count
 
-            return face_count
-
-        except Exception as e:
-            logger.error(f"Error detecting faces: {e}")
-            return 0
+    #     except Exception as e:
+    #         logger.error(f"Error detecting faces: {e}")
+    #         return 0
+    
 
     def detect_faces_in_person_crops(self, frame: np.ndarray, person_bboxes: list, frame_time: datetime, motion_event_id: int):
         """Detect faces within person bounding boxes and store results."""

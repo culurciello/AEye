@@ -50,6 +50,13 @@ Visit http://localhost:3000 to view the interactive timeline with object thumbna
 python3 processor.py video.mp4 --confidence 0.5 --model yolov8s.pt
 ```
 
+### 4. Optional: run on headless servers:
+
+```bash
+python main.py --video-source  rtsp://192.168.6.244:554/11 --headless
+```
+
+
 ## Web Dashboard Features
 
 ### Interactive Timeline
@@ -116,7 +123,11 @@ data/
 - `--pre-motion`: Seconds to record before motion (default: 30)
 - `--post-motion`: Seconds to record after motion (default: 30)
 - `--buffer-duration`: Circular buffer duration in seconds (default: 60)
-- `--fps`: Recording frame rate (default: 20)
+- `--fps`: Recording frame rate (default: 30)
+- `--headless`: Run without video display (for servers/background processing)
+- `--no-gpu`: Disable GPU acceleration for face detection
+- `--image-interval`: Seconds between periodic image captures (default: 600)
+- `--log-level`: Set logging level (DEBUG, INFO, WARNING, ERROR)
 
 **Web Viewer (`web_viewer.py`):**
 - `--base-path`: Data storage path (default: data)
@@ -140,11 +151,21 @@ python3 web_viewer.py --port 3000
 ### Linux Setup (Server/Remote)
 
 ```bash
-# Start motion detection (background processing)
-python3 main.py --video-source rtsp://192.168.6.244:554/11 &
+# Start motion detection in headless mode (no display)
+python3 main.py --video-source rtsp://192.168.6.244:554/11 --headless &
 
 # Launch web viewer for network access
 python3 web_viewer.py --host 0.0.0.0 --port 3000
+```
+
+### Headless/Server Mode
+
+```bash
+# Run without video display (perfect for servers or SSH sessions)
+python3 main.py --video-source 0 --headless
+
+# Background processing with custom settings
+nohup python3 main.py --video-source rtsp://camera --headless --log-level INFO > aeye.log 2>&1 &
 ```
 
 ### Camera Configuration
