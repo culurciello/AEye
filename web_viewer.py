@@ -64,6 +64,10 @@ class MotionViewer:
                 cursor.execute("ALTER TABLE motion_events ADD COLUMN object_count INTEGER DEFAULT 0")
                 print("Added object_count column to motion_events table")
 
+            if 'track_count' not in columns:
+                cursor.execute("ALTER TABLE motion_events ADD COLUMN track_count INTEGER DEFAULT 0")
+                print("Added track_count column to motion_events table")
+
         except Exception as e:
             print(f"Database migration info: {e}")
 
@@ -80,12 +84,57 @@ class MotionViewer:
                     bbox_y INTEGER,
                     bbox_width INTEGER,
                     bbox_height INTEGER,
+                    object_crop BLOB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
                 )
             ''')
         except Exception as e:
             print(f"Object detections table creation info: {e}")
+
+        # Check if object_crop column exists in object_detections
+        try:
+            cursor.execute("PRAGMA table_info(object_detections)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'object_crop' not in columns:
+                cursor.execute("ALTER TABLE object_detections ADD COLUMN object_crop BLOB")
+                print("Added object_crop column to object_detections table")
+
+            if 'track_id' not in columns:
+                cursor.execute("ALTER TABLE object_detections ADD COLUMN track_id INTEGER")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_object_detections_track_id ON object_detections(track_id)")
+                print("Added track_id column to object_detections table")
+
+        except Exception as e:
+            print(f"Object crop column migration info: {e}")
+
+        # Ensure object_tracks table exists
+        try:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS object_tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    motion_event_id INTEGER,
+                    class_name TEXT,
+                    track_start_time TIMESTAMP,
+                    track_end_time TIMESTAMP,
+                    detection_count INTEGER DEFAULT 0,
+                    avg_confidence REAL,
+                    first_bbox_x INTEGER,
+                    first_bbox_y INTEGER,
+                    first_bbox_width INTEGER,
+                    first_bbox_height INTEGER,
+                    last_bbox_x INTEGER,
+                    last_bbox_y INTEGER,
+                    last_bbox_width INTEGER,
+                    last_bbox_height INTEGER,
+                    representative_crop BLOB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
+                )
+            ''')
+        except Exception as e:
+            print(f"Object tracks table creation info: {e}")
 
         conn.commit()
 
@@ -128,7 +177,7 @@ class MotionViewer:
             cursor = conn.cursor()
 
             query = """SELECT id, start_time, end_time, video_file, duration_seconds,
-                              processed, face_count, object_count, created_at
+                              processed, face_count, object_count, track_count, created_at
                        FROM motion_events WHERE 1=1"""
             params = []
 
@@ -171,6 +220,9 @@ class MotionViewer:
             cursor.execute('SELECT SUM(object_count) FROM motion_events')
             total_objects_in_events = cursor.fetchone()[0] or 0
 
+            cursor.execute('SELECT SUM(track_count) FROM motion_events')
+            total_tracks_in_events = cursor.fetchone()[0] or 0
+
             cursor.execute('SELECT processed, COUNT(*) FROM motion_events GROUP BY processed')
             processing_stats = dict(cursor.fetchall())
 
@@ -181,6 +233,7 @@ class MotionViewer:
                 'total_object_detections': total_object_detections,
                 'total_faces_in_events': total_faces_in_events,
                 'total_objects_in_events': total_objects_in_events,
+                'total_tracks_in_events': total_tracks_in_events,
                 'processed_events': processing_stats.get(1, 0),
                 'unprocessed_events': processing_stats.get(0, 0)
             }
@@ -301,6 +354,74 @@ class MotionViewer:
                 'class_counts': class_counts
             }
 
+    def get_object_tracks(self, motion_event_id=None, date_filter=None, limit=100, offset=0):
+        """Get object tracks with optional filtering."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = """SELECT ot.id, ot.motion_event_id, ot.class_name, ot.track_start_time, ot.track_end_time,
+                              ot.detection_count, ot.avg_confidence, ot.first_bbox_x, ot.first_bbox_y,
+                              ot.first_bbox_width, ot.first_bbox_height, ot.last_bbox_x, ot.last_bbox_y,
+                              ot.last_bbox_width, ot.last_bbox_height, ot.created_at, me.video_file
+                       FROM object_tracks ot
+                       JOIN motion_events me ON ot.motion_event_id = me.id
+                       WHERE 1=1"""
+            params = []
+
+            if motion_event_id:
+                query += " AND ot.motion_event_id = ?"
+                params.append(motion_event_id)
+
+            if date_filter:
+                query += " AND DATE(ot.track_start_time) = ?"
+                params.append(date_filter)
+
+            query += " ORDER BY ot.track_start_time DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def get_object_track_stats(self):
+        """Get statistics about object tracks."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT DATE(track_start_time) as date, COUNT(*) as count
+                FROM object_tracks
+                GROUP BY DATE(track_start_time)
+                ORDER BY date DESC
+                LIMIT 30
+            ''')
+            track_date_counts = cursor.fetchall()
+
+            cursor.execute('SELECT COUNT(*) FROM object_tracks')
+            total_tracks = cursor.fetchone()[0]
+
+            cursor.execute('SELECT AVG(avg_confidence) FROM object_tracks')
+            avg_track_confidence = cursor.fetchone()[0] or 0
+
+            cursor.execute('SELECT AVG(detection_count) FROM object_tracks')
+            avg_detections_per_track = cursor.fetchone()[0] or 0
+
+            cursor.execute('''
+                SELECT class_name, COUNT(*) as count, AVG(detection_count) as avg_detections
+                FROM object_tracks
+                GROUP BY class_name
+                ORDER BY count DESC
+                LIMIT 10
+            ''')
+            track_class_stats = cursor.fetchall()
+
+            return {
+                'track_date_counts': track_date_counts,
+                'total_tracks': total_tracks,
+                'avg_track_confidence': round(avg_track_confidence, 3),
+                'avg_detections_per_track': round(avg_detections_per_track, 1),
+                'track_class_stats': track_class_stats
+            }
+
     def get_images_for_date(self, date):
         """Get list of images for a specific date."""
         date_str = date.replace('-', '_')  # Convert YYYY-MM-DD to YYYY_MM_DD
@@ -380,7 +501,8 @@ def api_motion_events():
             'processed': bool(event[5]),
             'face_count': event[6],
             'object_count': event[7] if len(event) > 7 else 0,
-            'created_at': event[8] if len(event) > 8 else event[7]
+            'track_count': event[8] if len(event) > 8 else 0,
+            'created_at': event[9] if len(event) > 9 else (event[8] if len(event) > 8 else event[7])
         }
         event_list.append(event_data)
 
@@ -473,6 +595,121 @@ def api_object_stats_route():
     stats = viewer.get_object_detection_stats()
     return jsonify(stats)
 
+@app.route('/api/object_tracks')
+def api_object_tracks():
+    """API endpoint to get object tracks with filtering."""
+    motion_event_id = request.args.get('motion_event_id', type=int)
+    date_filter = request.args.get('date')
+    limit = int(request.args.get('limit', 100))
+    offset = int(request.args.get('offset', 0))
+
+    tracks = viewer.get_object_tracks(
+        motion_event_id=motion_event_id,
+        date_filter=date_filter,
+        limit=limit,
+        offset=offset
+    )
+
+    # Convert to JSON-serializable format
+    track_list = []
+    for track in tracks:
+        track_data = {
+            'id': track[0],
+            'motion_event_id': track[1],
+            'class_name': track[2],
+            'track_start_time': track[3],
+            'track_end_time': track[4],
+            'detection_count': track[5],
+            'avg_confidence': track[6],
+            'first_bbox_x': track[7],
+            'first_bbox_y': track[8],
+            'first_bbox_width': track[9],
+            'first_bbox_height': track[10],
+            'last_bbox_x': track[11],
+            'last_bbox_y': track[12],
+            'last_bbox_width': track[13],
+            'last_bbox_height': track[14],
+            'created_at': track[15],
+            'video_file': track[16]
+        }
+        track_list.append(track_data)
+
+    return jsonify(track_list)
+
+@app.route('/api/motion_event/<int:event_id>/tracks')
+def api_motion_event_tracks(event_id):
+    """API endpoint to get tracks for a motion event (primary view)."""
+    include_detections = request.args.get('include_detections', 'false').lower() == 'true'
+
+    try:
+        tracks = viewer.get_object_tracks(motion_event_id=event_id)
+
+        track_list = []
+        for track in tracks:
+            track_data = {
+                'id': track[0],
+                'motion_event_id': track[1],
+                'class_name': track[2],
+                'track_start_time': track[3],
+                'track_end_time': track[4],
+                'detection_count': track[5],
+                'avg_confidence': track[6],
+                'first_bbox': {
+                    'x': track[7],
+                    'y': track[8],
+                    'width': track[9],
+                    'height': track[10]
+                },
+                'last_bbox': {
+                    'x': track[11],
+                    'y': track[12],
+                    'width': track[13],
+                    'height': track[14]
+                },
+                'created_at': track[15],
+                'video_file': track[16],
+                'crop_url': f'/api/object_track/{track[0]}/image'
+            }
+
+            # Optionally include individual detections for this track
+            if include_detections:
+                with viewer._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT id, frame_timestamp, confidence, bbox_x, bbox_y, bbox_width, bbox_height FROM object_detections WHERE track_id = ? ORDER BY frame_timestamp",
+                        (track[0],)
+                    )
+                    detections = cursor.fetchall()
+
+                    track_data['detections'] = []
+                    for det in detections:
+                        detection_data = {
+                            'id': det[0],
+                            'frame_timestamp': det[1],
+                            'confidence': det[2],
+                            'bbox': {
+                                'x': det[3],
+                                'y': det[4],
+                                'width': det[5],
+                                'height': det[6]
+                            },
+                            'crop_url': f'/api/object_detection/{det[0]}/image'
+                        }
+                        track_data['detections'].append(detection_data)
+
+            track_list.append(track_data)
+
+        return jsonify(track_list)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/track_stats')
+def api_track_stats_route():
+    """API endpoint to get object track statistics."""
+    stats = viewer.get_object_track_stats()
+    return jsonify(stats)
+
 @app.route('/api/hourly_activity')
 def api_hourly_activity():
     """API endpoint to get motion events grouped by hour."""
@@ -540,7 +777,7 @@ def api_motion_event_detail(event_id):
         with viewer._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, start_time, end_time, video_file, duration_seconds, processed, face_count, object_count, created_at FROM motion_events WHERE id = ?",
+                "SELECT id, start_time, end_time, video_file, duration_seconds, processed, face_count, object_count, track_count, created_at FROM motion_events WHERE id = ?",
                 (event_id,)
             )
             event = cursor.fetchone()
@@ -557,7 +794,8 @@ def api_motion_event_detail(event_id):
                 'processed': bool(event[5]) if event[5] is not None else False,
                 'face_count': int(event[6]) if event[6] else 0,
                 'object_count': int(event[7]) if event[7] else 0,
-                'created_at': str(event[8]) if event[8] else None
+                'track_count': int(event[8]) if event[8] else 0,
+                'created_at': str(event[9]) if event[9] else None
             }
 
             # Get face detections for this event (exclude binary data and handle data type conversion safely)
@@ -607,6 +845,53 @@ def api_motion_event_detail(event_id):
                     event_data['object_detections'].append(object_detection)
                 except (ValueError, TypeError) as e:
                     # Skip invalid object detection data
+                    continue
+
+            # Get object tracks for this event (primary object detection data)
+            cursor.execute(
+                "SELECT id, class_name, track_start_time, track_end_time, detection_count, avg_confidence, first_bbox_x, first_bbox_y, first_bbox_width, first_bbox_height, last_bbox_x, last_bbox_y, last_bbox_width, last_bbox_height FROM object_tracks WHERE motion_event_id = ?",
+                (event_id,)
+            )
+            object_tracks = cursor.fetchall()
+
+            event_data['object_tracks'] = []
+            for ot in object_tracks:
+                try:
+                    duration = None
+                    if ot[2] and ot[3]:  # start_time and end_time
+                        try:
+                            from datetime import datetime
+                            start = datetime.fromisoformat(str(ot[2]).replace('Z', '+00:00'))
+                            end = datetime.fromisoformat(str(ot[3]).replace('Z', '+00:00'))
+                            duration = (end - start).total_seconds()
+                        except:
+                            duration = None
+
+                    object_track = {
+                        'id': int(ot[0]),
+                        'class_name': str(ot[1]) if ot[1] else None,
+                        'track_start_time': str(ot[2]) if ot[2] else None,
+                        'track_end_time': str(ot[3]) if ot[3] else None,
+                        'duration_seconds': duration,
+                        'detection_count': int(ot[4]) if ot[4] is not None else 0,
+                        'avg_confidence': float(ot[5]) if ot[5] is not None else 0.0,
+                        'first_bbox': {
+                            'x': int(ot[6]) if ot[6] is not None else 0,
+                            'y': int(ot[7]) if ot[7] is not None else 0,
+                            'width': int(ot[8]) if ot[8] is not None else 0,
+                            'height': int(ot[9]) if ot[9] is not None else 0
+                        },
+                        'last_bbox': {
+                            'x': int(ot[10]) if ot[10] is not None else 0,
+                            'y': int(ot[11]) if ot[11] is not None else 0,
+                            'width': int(ot[12]) if ot[12] is not None else 0,
+                            'height': int(ot[13]) if ot[13] is not None else 0
+                        },
+                        'crop_url': f'/api/object_track/{int(ot[0])}/image'
+                    }
+                    event_data['object_tracks'].append(object_track)
+                except (ValueError, TypeError) as e:
+                    # Skip invalid track data
                     continue
 
             # Check if the video file exists, if not find closest match
@@ -698,14 +983,14 @@ def api_face_detection_image(detection_id):
 
 @app.route('/api/object_detection/<int:detection_id>/image')
 def api_object_detection_image(detection_id):
-    """API endpoint to get object crop image generated from video frame."""
+    """API endpoint to get object crop image - prioritizes stored crops, falls back to video extraction."""
     try:
         with viewer._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Get object detection data with video file info
+            # First, try to get stored object crop
             cursor.execute("""
-                SELECT od.bbox_x, od.bbox_y, od.bbox_width, od.bbox_height,
+                SELECT od.object_crop, od.bbox_x, od.bbox_y, od.bbox_width, od.bbox_height,
                        od.frame_timestamp, me.video_file
                 FROM object_detections od
                 JOIN motion_events me ON od.motion_event_id = me.id
@@ -716,8 +1001,13 @@ def api_object_detection_image(detection_id):
             if not result:
                 return "Object detection not found", 404
 
-            bbox_x, bbox_y, bbox_width, bbox_height, frame_timestamp, video_file = result
+            object_crop, bbox_x, bbox_y, bbox_width, bbox_height, frame_timestamp, video_file = result
 
+            # If we have a stored crop, return it directly
+            if object_crop:
+                return Response(object_crop, mimetype='image/jpeg')
+
+            # Fallback to video frame extraction
             # Handle video file path (remove data/videos/ prefix if present)
             if video_file.startswith('data/videos/'):
                 relative_path = video_file.replace('data/videos/', '')
@@ -735,14 +1025,12 @@ def api_object_detection_image(detection_id):
                 return "Could not open video", 404
 
             # Get video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
             # Parse frame timestamp to get approximate frame number
             # This is approximate since we don't have exact frame timing
             try:
                 from datetime import datetime
-                frame_time = datetime.fromisoformat(frame_timestamp.replace('Z', '+00:00'))
                 # Use middle frame as fallback
                 frame_number = total_frames // 2
             except:
@@ -777,6 +1065,25 @@ def api_object_detection_image(detection_id):
 
     except Exception as e:
         return f"Error generating object crop: {str(e)}", 500
+
+@app.route('/api/object_track/<int:track_id>/image')
+def api_object_track_image(track_id):
+    """API endpoint to get object track representative crop image."""
+    try:
+        with viewer._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT representative_crop FROM object_tracks WHERE id = ?",
+                (track_id,)
+            )
+            result = cursor.fetchone()
+
+            if not result or not result[0]:
+                return "Track representative crop not found", 404
+
+            return Response(result[0], mimetype='image/jpeg')
+    except Exception as e:
+        return f"Error retrieving track crop: {str(e)}", 500
 
 
 @app.route('/api/video_info/<path:video_path>')

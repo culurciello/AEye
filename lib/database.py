@@ -95,10 +95,48 @@ class DatabaseManager:
                 bbox_y INTEGER,
                 bbox_width INTEGER,
                 bbox_height INTEGER,
+                object_crop BLOB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
             )
         ''')
+
+        # Add object_crop column to existing object_detections table if it doesn't exist
+        try:
+            cursor.execute('ALTER TABLE object_detections ADD COLUMN object_crop BLOB')
+        except:
+            pass  # Column already exists
+
+        # Create object tracks table for organizing detections
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS object_tracks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                motion_event_id INTEGER,
+                class_name TEXT,
+                track_start_time TIMESTAMP,
+                track_end_time TIMESTAMP,
+                detection_count INTEGER DEFAULT 0,
+                avg_confidence REAL,
+                first_bbox_x INTEGER,
+                first_bbox_y INTEGER,
+                first_bbox_width INTEGER,
+                first_bbox_height INTEGER,
+                last_bbox_x INTEGER,
+                last_bbox_y INTEGER,
+                last_bbox_width INTEGER,
+                last_bbox_height INTEGER,
+                representative_crop BLOB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (motion_event_id) REFERENCES motion_events(id)
+            )
+        ''')
+
+        # Add track_id column to object_detections to link detections to tracks
+        try:
+            cursor.execute('ALTER TABLE object_detections ADD COLUMN track_id INTEGER')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_object_detections_track_id ON object_detections(track_id)')
+        except:
+            pass  # Column already exists
 
         conn.commit()
         conn.close()
@@ -173,7 +211,7 @@ class DatabaseManager:
 
     def store_object_detection(self, motion_event_id: int, frame_time: datetime,
                               class_name: str, confidence: float,
-                              x: int, y: int, w: int, h: int) -> int:
+                              x: int, y: int, w: int, h: int, object_crop: bytes = None, track_id: int = None) -> int:
         """Store an object detection in the database.
 
         Args:
@@ -182,6 +220,7 @@ class DatabaseManager:
             class_name: Detected object class name
             confidence: Detection confidence score
             x, y, w, h: Bounding box coordinates
+            object_crop: Object crop image as bytes
 
         Returns:
             The ID of the created object detection
@@ -192,10 +231,10 @@ class DatabaseManager:
         cursor.execute('''
             INSERT INTO object_detections
             (motion_event_id, frame_timestamp, class_name, confidence,
-             bbox_x, bbox_y, bbox_width, bbox_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             bbox_x, bbox_y, bbox_width, bbox_height, object_crop, track_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (motion_event_id, frame_time, class_name, confidence,
-              x, y, w, h))
+              x, y, w, h, object_crop, track_id))
 
         object_detection_id = cursor.lastrowid
         conn.commit()
@@ -203,6 +242,125 @@ class DatabaseManager:
 
         logger.debug(f"Stored object detection {object_detection_id}: {class_name} for motion event {motion_event_id}")
         return object_detection_id
+
+    def create_object_track(self, motion_event_id: int, class_name: str, start_time: datetime,
+                           first_bbox: tuple, first_confidence: float, representative_crop: bytes = None) -> int:
+        """Create a new object track.
+
+        Args:
+            motion_event_id: ID of the associated motion event
+            class_name: Object class name
+            start_time: Track start timestamp
+            first_bbox: First bounding box (x, y, w, h)
+            first_confidence: First detection confidence
+            representative_crop: Representative crop image
+
+        Returns:
+            The ID of the created track
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        x, y, w, h = first_bbox
+
+        cursor.execute('''
+            INSERT INTO object_tracks
+            (motion_event_id, class_name, track_start_time, track_end_time,
+             detection_count, avg_confidence, first_bbox_x, first_bbox_y,
+             first_bbox_width, first_bbox_height, last_bbox_x, last_bbox_y,
+             last_bbox_width, last_bbox_height, representative_crop)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (motion_event_id, class_name, start_time, start_time,
+              1, first_confidence, x, y, w, h, x, y, w, h, representative_crop))
+
+        track_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        logger.debug(f"Created object track {track_id}: {class_name} for motion event {motion_event_id}")
+        return track_id
+
+    def update_object_track(self, track_id: int, end_time: datetime, last_bbox: tuple,
+                          detection_count: int, avg_confidence: float) -> None:
+        """Update an existing object track.
+
+        Args:
+            track_id: ID of the track to update
+            end_time: Track end timestamp
+            last_bbox: Last bounding box (x, y, w, h)
+            detection_count: Total number of detections in track
+            avg_confidence: Average confidence across all detections
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        x, y, w, h = last_bbox
+
+        cursor.execute('''
+            UPDATE object_tracks
+            SET track_end_time = ?, last_bbox_x = ?, last_bbox_y = ?,
+                last_bbox_width = ?, last_bbox_height = ?,
+                detection_count = ?, avg_confidence = ?
+            WHERE id = ?
+        ''', (end_time, x, y, w, h, detection_count, avg_confidence, track_id))
+
+        conn.commit()
+        conn.close()
+
+        logger.debug(f"Updated object track {track_id}")
+
+    def update_motion_event_track_count(self, motion_event_id: int) -> None:
+        """Update the track count for a motion event."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Count tracks for this motion event
+        cursor.execute('SELECT COUNT(*) FROM object_tracks WHERE motion_event_id = ?', (motion_event_id,))
+        track_count = cursor.fetchone()[0]
+
+        # Update motion event
+        cursor.execute(
+            'UPDATE motion_events SET track_count = ? WHERE id = ?',
+            (track_count, motion_event_id)
+        )
+
+        conn.commit()
+        conn.close()
+
+        logger.debug(f"Updated motion event {motion_event_id} track count to {track_count}")
+
+    def get_object_tracks(self, motion_event_id: int = None) -> list:
+        """Get object tracks with optional filtering.
+
+        Args:
+            motion_event_id: Optional motion event ID to filter by
+
+        Returns:
+            List of track records
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        query = '''
+            SELECT id, motion_event_id, class_name, track_start_time, track_end_time,
+                   detection_count, avg_confidence, first_bbox_x, first_bbox_y,
+                   first_bbox_width, first_bbox_height, last_bbox_x, last_bbox_y,
+                   last_bbox_width, last_bbox_height, created_at
+            FROM object_tracks
+        '''
+        params = []
+
+        if motion_event_id:
+            query += ' WHERE motion_event_id = ?'
+            params.append(motion_event_id)
+
+        query += ' ORDER BY track_start_time DESC'
+
+        cursor.execute(query, params)
+        tracks = cursor.fetchall()
+        conn.close()
+
+        return tracks
 
     def get_motion_event_by_video_file(self, video_file: str) -> Optional[Tuple[int, dict]]:
         """Get motion event by video file path.

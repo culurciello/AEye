@@ -44,7 +44,10 @@ async function loadAvailableDates() {
         dates.forEach(date => {
             const option = document.createElement('option');
             option.value = date;
-            option.textContent = new Date(date).toLocaleDateString();
+            // Parse date string manually to avoid timezone issues
+            const [year, month, day] = date.split('-');
+            const localDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+            option.textContent = localDate.toLocaleDateString();
             selector.appendChild(option);
         });
 
