@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to download YOLO models and DeepFace models
+# Script to download YOLO models and InsightFace models
 # Usage: ./download_models.sh [model_size]
 # If no model_size specified, downloads yolov8s (small) as a good default
 
@@ -54,23 +54,24 @@ download_model() {
     fi
 }
 
-download_deepface_models() {
-    echo "🎭 Downloading DeepFace models..."
-    
-    # Create a simple Python script to initialize DeepFace models
+download_insightface_models() {
+    echo "👁️ Downloading InsightFace models..."
+
+    # Create a simple Python script to initialize InsightFace models
     python3 -c "
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
 try:
-    from deepface.basemodels import Facenet
-    print('📦 Loading FaceNet model...')
-    model = Facenet.loadModel()
-    print('✅ FaceNet model downloaded and cached successfully')
+    import insightface
+    print('📦 Loading InsightFace model...')
+    app = insightface.app.FaceAnalysis(providers=['CPUExecutionProvider'])
+    app.prepare(ctx_id=0, det_size=(640, 640))
+    print('✅ InsightFace model downloaded and cached successfully')
 except ImportError:
-    print('❌ DeepFace not installed. Run: pip install deepface')
+    print('❌ InsightFace not installed. Run: pip install insightface')
     exit(1)
 except Exception as e:
-    print(f'❌ Error downloading DeepFace models: {e}')
+    print(f'❌ Error downloading InsightFace models: {e}')
     exit(1)
 "
 }
@@ -79,16 +80,16 @@ if [ $# -eq 0 ]; then
     echo "🚀 Downloading recommended YOLOv8 Small model..."
     download_model "yolov8s.pt"
     echo ""
-    download_deepface_models
+    download_insightface_models
 elif [ "$1" = "all" ]; then
     echo "🚀 Downloading all YOLOv8 models..."
     for model in yolov8n.pt yolov8s.pt yolov8m.pt yolov8l.pt yolov8x.pt; do
         download_model "$model"
     done
     echo ""
-    download_deepface_models
-elif [ "$1" = "deepface" ]; then
-    download_deepface_models
+    download_insightface_models
+elif [ "$1" = "insightface" ]; then
+    download_insightface_models
 else
     model_file=$(get_model_file "$1")
     if [ -n "$model_file" ]; then
@@ -103,8 +104,8 @@ else
         echo "  medium, m     - YOLOv8 Medium (49.7MB)"
         echo "  large, l      - YOLOv8 Large (83.7MB)"
         echo "  extra-large, x - YOLOv8 Extra Large (131.4MB)"
-        echo "  all           - Download all YOLO models + DeepFace"
-        echo "  deepface      - Download only DeepFace models"
+        echo "  all           - Download all YOLO models + InsightFace"
+        echo "  insightface   - Download only InsightFace models"
         echo ""
         echo "Usage: $0 [model_size]"
         echo "Example: $0 small"

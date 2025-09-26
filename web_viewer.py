@@ -1119,6 +1119,50 @@ def api_video_info(video_path):
 
 
 
+@app.route('/api/latest_camera_image')
+def api_latest_camera_image():
+    """Get the latest camera snapshot."""
+    try:
+        # Find the most recent camera image
+        latest_image = None
+        latest_timestamp = None
+
+        for date in viewer.get_available_dates()[:3]:  # Check last 3 days
+            images = viewer.get_images_for_date(date)
+            camera_images = [img for img in images if img['filename'].startswith('camera_')]
+
+            if camera_images:
+                # Sort by filename (which contains timestamp) to get the latest
+                camera_images.sort(key=lambda x: x['filename'], reverse=True)
+                latest_image = camera_images[0]
+
+                # Extract timestamp from filename
+                try:
+                    filename = latest_image['filename']  # e.g., camera_20250924_143504.jpg
+                    timestamp_str = filename.replace('camera_', '').replace('.jpg', '')
+                    # Parse timestamp: 20250924_143504 -> 2025-09-24 14:35:04
+                    date_part = timestamp_str[:8]
+                    time_part = timestamp_str[9:]
+                    formatted_date = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                    formatted_time = f"{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}"
+                    latest_timestamp = f"{formatted_date} {formatted_time}"
+                    break
+                except:
+                    latest_timestamp = "Unknown time"
+                    break
+
+        if latest_image:
+            return jsonify({
+                'image_url': latest_image['url'],
+                'timestamp': latest_timestamp,
+                'filename': latest_image['filename']
+            })
+        else:
+            return jsonify({'error': 'No camera images found'}), 404
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/available_dates')
 def api_available_dates():
     """Get list of available dates with data."""

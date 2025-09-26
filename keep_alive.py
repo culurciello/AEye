@@ -15,7 +15,7 @@ import os
 from datetime import datetime
 
 # Configuration
-COMMAND = ["python3", "main.py", "--video-source", "rtsp://192.168.6.244:554/11", "--headless"]
+COMMAND = ["python3", "main.py", "--video-source", "rtsp://192.168.6.244:554/11"]#, "--headless"]
 RESTART_DELAY = 5  # seconds to wait before restarting
 MAX_RESTART_ATTEMPTS = 5  # max restarts within RESTART_WINDOW
 RESTART_WINDOW = 300  # 5 minutes window for counting restarts

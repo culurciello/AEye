@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AEye - Camera Intelligence</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('', filename='css/style.css') }}">
 </head>
 <body>
     <div class="header">
@@ -27,6 +27,12 @@
     </div>
 
     <div class="container">
+        <!-- Camera Feed Link -->
+        <div class="camera-feed-section">
+            <a href="#" class="camera-feed-link" onclick="showLatestCameraSnapshot()">
+                📹 View Camera Feed
+            </a>
+        </div>
         <div class="dashboard">
             <!-- Stats Grid -->
             <div class="stats-grid" id="statsGrid">

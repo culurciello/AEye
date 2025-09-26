@@ -491,3 +491,41 @@ body.dark .timeline-header {
         padding: 0 1rem;
     }
 }
+
+/* Camera Feed Section */
+.camera-feed-section {
+    padding: 1rem 0;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.camera-feed-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+    color: white;
+    padding: 0.75rem 1.5rem;
+    border-radius: var(--border-radius);
+    text-decoration: none;
+    font-weight: 500;
+    transition: all 0.2s;
+    box-shadow: var(--shadow-sm);
+}
+
+.camera-feed-link:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+    text-decoration: none;
+    color: white;
+}
+
+@media (max-width: 768px) {
+    .camera-feed-section {
+        text-align: center;
+    }
+
+    .camera-feed-link {
+        display: inline-flex;
+    }
+}
