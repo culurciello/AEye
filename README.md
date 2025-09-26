@@ -75,12 +75,6 @@ python main.py --video-source  rtsp://192.168.6.244:554/11 --headless
 
 ## YOLO Model Options
 
-Focus on categories: 
-
-[person, bicycle, car, truck, bus, motorcycle, bird, cat, dog, backpack , handbag, suitcase]
-
-
-
 | Model | Size | Speed | Accuracy | Use Case |
 |-------|------|-------|----------|----------|
 | yolov8n.pt | 6.2MB | Fastest | Basic | Real-time, low power |

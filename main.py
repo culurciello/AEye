@@ -39,8 +39,7 @@ class MotionTriggeredProcessor:
                  fps: int = 30,
                  use_gpu: bool = True,
                  image_capture_interval: int = 600,  # 10 minutes in seconds
-                 headless: bool = False,
-                 min_motion_duration: float = 3.0):  # Minimum motion duration in seconds
+                 headless: bool = False):
         """
         Initialize the motion triggered processor.
 
@@ -56,7 +55,6 @@ class MotionTriggeredProcessor:
             use_gpu: Whether to use GPU for face detection
             image_capture_interval: Seconds between periodic image captures (default: 600 = 10 minutes)
             headless: Skip visualization and display for server/headless mode
-            min_motion_duration: Minimum motion duration in seconds to create an event (default: 3.0)
         """
         self.video_source = video_source
         self.videos_dir = videos_dir
@@ -69,10 +67,8 @@ class MotionTriggeredProcessor:
         self.use_gpu = use_gpu
         self.image_capture_interval = image_capture_interval
         self.headless = headless
-        self.min_motion_duration = min_motion_duration
 
         # Create required directories
-        os.makedirs("data/", exist_ok=True)
         os.makedirs(self.videos_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -107,8 +103,8 @@ class MotionTriggeredProcessor:
         self.video_processor = VideoProcessor(self.videos_dir, self.fps, self.pre_motion_seconds, self.post_motion_seconds, self.db_manager)
         self.video_processor.video_buffer = self.video_buffer
 
-        # Pre-initialize FFmpeg
-        self.video_processor._warmup_ffmpeg_writer()
+        # Pre-initialize video codec
+        self.video_processor._warmup_video_writer()
         
         # Motion state tracking
         self.motion_active = False
@@ -119,6 +115,7 @@ class MotionTriggeredProcessor:
         # Recording state
         self.is_recording = False
         self.current_recording_path = None
+        self.recording_writer = None
         self.recording_frame_size = None
         
         # Processing queue
@@ -422,8 +419,8 @@ class MotionTriggeredProcessor:
                     self.last_motion_time = current_time
 
                     # Continue recording
-                    if self.is_recording:
-                        self.video_processor.add_live_frame(frame, current_time)
+                    if self.is_recording and self.video_processor.recording_writer:
+                        self.video_processor.recording_writer.write(frame)
                 
                 else:
                     # No motion detected
@@ -432,32 +429,18 @@ class MotionTriggeredProcessor:
                         time_since_motion = (current_time - self.last_motion_time).total_seconds()
                         
                         if time_since_motion > self.motion_timeout:
-                            # Motion ended - check if duration meets minimum requirement
-                            motion_duration = (current_time - self.motion_start_time).total_seconds()
+                            # Motion ended
                             self.motion_active = False
+                            segment = self.stop_recording(current_time, self.motion_start_time)
+                            self.is_recording = False
 
-                            if motion_duration >= self.min_motion_duration:
-                                # Motion was long enough, save the event
-                                segment = self.stop_recording(current_time, self.motion_start_time)
-                                self.is_recording = False
-                                if segment:
-                                    self.processing_queue.append(segment)
-                                    logger.info(f"Motion ended ({motion_duration:.1f}s) - Recording queued for processing")
-                            else:
-                                # Motion was too short, discard the recording
-                                self.is_recording = False
-                                # Delete the temporary recording file
-                                if self.current_recording_path and os.path.exists(self.current_recording_path):
-                                    try:
-                                        os.remove(self.current_recording_path)
-                                        logger.info(f"Motion too short ({motion_duration:.1f}s < {self.min_motion_duration}s) - Discarded recording")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to delete short recording: {e}")
-                                self.current_recording_path = None
+                            if segment:
+                                self.processing_queue.append(segment)
+                                logger.info("Motion ended - Recording queued for processing")
 
                     # Continue recording for a bit after motion stops
-                    if self.is_recording:
-                        self.video_processor.add_live_frame(frame, current_time)
+                    if self.is_recording and self.video_processor.recording_writer:
+                        self.video_processor.recording_writer.write(frame)
                 
                 # Create visualization and display only if not in headless mode
                 if not self.headless:
@@ -490,29 +473,11 @@ class MotionTriggeredProcessor:
         
         finally:
             # Cleanup
-            if self.is_recording and self.motion_start_time:
-                # Check if motion duration meets minimum requirement during cleanup
-                cleanup_time = datetime.now()
-                motion_duration = (cleanup_time - self.motion_start_time).total_seconds()
-
-                if motion_duration >= self.min_motion_duration:
-                    # Motion was long enough, save the event
-                    segment = self.stop_recording(cleanup_time, self.motion_start_time)
-                    self.is_recording = False
-                    if segment:
-                        self.processing_queue.append(segment)
-                        logger.info(f"Cleanup: Motion duration ({motion_duration:.1f}s) - Recording queued for processing")
-                else:
-                    # Motion was too short, discard the recording
-                    self.is_recording = False
-                    # Delete the temporary recording file
-                    if self.current_recording_path and os.path.exists(self.current_recording_path):
-                        try:
-                            os.remove(self.current_recording_path)
-                            logger.info(f"Cleanup: Motion too short ({motion_duration:.1f}s < {self.min_motion_duration}s) - Discarded recording")
-                        except Exception as e:
-                            logger.warning(f"Failed to delete short recording during cleanup: {e}")
-                    self.current_recording_path = None
+            if self.is_recording:
+                segment = self.stop_recording(datetime.now(), self.motion_start_time)
+                self.is_recording = False
+                if segment:
+                    self.processing_queue.append(segment)
             
             self.stop_processing = True
             if self.processing_thread:
@@ -529,28 +494,36 @@ def main():
                        help='Video source (camera index or file path)')
     parser.add_argument('--output-dir', default='data/',
                        help='Base output directory (videos/, images/, db/ will be created inside)')
-    parser.add_argument('--buffer-duration', type=int, default=90,
-                       help='Circular buffer duration in seconds (default: 90)')
+    parser.add_argument('--buffer-duration', type=int, default=120,
+                       help='Circular buffer duration in seconds (default: 120)')
     parser.add_argument('--pre-motion', type=int, default=30,
                        help='Seconds to record before motion (default: 30)')
     parser.add_argument('--post-motion', type=int, default=60,
                        help='Seconds to record after motion (default: 60)')
-    parser.add_argument('--fps', type=int, default=30,
-                       help='Target FPS for processing (default: 30)')
+    parser.add_argument('--fps', type=int, default=15,
+                       help='Target FPS for processing (default: 15)')
     parser.add_argument('--no-gpu', action='store_true',
                        help='Disable GPU usage for face detection')
     parser.add_argument('--image-interval', type=int, default=600,
                        help='Seconds between periodic image captures (default: 600 = 10 minutes)')
     parser.add_argument('--headless', action='store_true',
                        help='Run in headless mode without video display (for servers)')
-    parser.add_argument('--min-motion-duration', type=float, default=3.0,
-                       help='Minimum motion duration in seconds to create an event (default: 3.0)')
     parser.add_argument('--log-level',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO',
                        help='Set the logging level (default: INFO)')
     
     args = parser.parse_args()
+
+    # Create derived paths from base output directory
+    base_output_dir = args.output_dir.rstrip('/')
+    videos_dir = os.path.join(base_output_dir, 'videos')
+    images_dir = os.path.join(base_output_dir, 'images')
+    db_path = os.path.join(base_output_dir, 'db', 'detections.db')
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(videos_dir, exist_ok=True)
+    os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
     
     # Setup logging
     logging.basicConfig(
@@ -569,16 +542,7 @@ def main():
             video_source = int(args.video_source)
         except ValueError:
             video_source = args.video_source
-        
-        # Create derived paths from base output directory
-        base_output_dir = args.output_dir.rstrip('/')
-        videos_dir = os.path.join(base_output_dir, 'videos')
-        images_dir = os.path.join(base_output_dir, 'images')
-        db_path = os.path.join(base_output_dir, 'db', 'detections.db')
-        os.makedirs(base_output_dir, exist_ok=True)
-        os.makedirs(videos_dir, exist_ok=True)
-        os.makedirs(images_dir, exist_ok=True)
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
 
         processor = MotionTriggeredProcessor(
             video_source=video_source,
@@ -591,8 +555,7 @@ def main():
             fps=args.fps,
             use_gpu=not args.no_gpu,
             image_capture_interval=args.image_interval,
-            headless=args.headless,
-            min_motion_duration=args.min_motion_duration
+            headless=args.headless
         )
         
         # Run processor

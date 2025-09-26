@@ -15,7 +15,7 @@ class FaceDetector:
         self.face_app = None
         self.known_faces_dir = known_faces_dir
         self.known_face_embeddings = {}
-        self.recognition_threshold = 0.5  # Similarity threshold for face recognition
+        self.recognition_threshold = 0.4  # Similarity threshold for face recognition
 
     def init_face_detector(self):
         """Initialize and warm up face detection using InsightFace."""

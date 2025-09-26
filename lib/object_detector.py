@@ -2,8 +2,6 @@ import numpy as np
 import cv2
 import logging
 from datetime import datetime
-import torch
-from PIL import Image
 
 # YOLO object detection
 try:
@@ -12,14 +10,6 @@ try:
 except ImportError:
     YOLO_AVAILABLE = False
     print("Warning: ultralytics not available. Install with: pip install ultralytics")
-
-# CLIP for embeddings
-try:
-    import clip
-    CLIP_AVAILABLE = True
-except ImportError:
-    CLIP_AVAILABLE = False
-    print("Warning: openai-clip not available. Install with: pip install openai-clip")
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +54,9 @@ class ObjectDetector:
     def __init__(self, db_manager):
         self.db_manager = db_manager
         self.yolo_model = None
-        self.clip_model = None
-        self.clip_preprocess = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.active_tracks = {}  # Dict to store active tracks per motion event
         self.track_iou_threshold = 0.3  # IoU threshold for track association
         self.max_track_age = 5  # Maximum frames without detection before track ends
-
-        # Only detect these specific categories
-        self.allowed_categories = {
-            'person', 'bicycle', 'car', 'truck', 'bus', 'motorcycle',
-            'bird', 'cat', 'dog', 'backpack', 'handbag', 'suitcase'
-        }
 
     def init_yolo_detector(self):
         """Initialize YOLO object detection model."""
@@ -104,62 +85,6 @@ class ObjectDetector:
         except Exception as e:
             logger.error(f"Failed to initialize YOLO: {e}")
             self.yolo_model = None
-
-        # Initialize CLIP model
-        self.init_clip_model()
-
-    def init_clip_model(self):
-        """Initialize CLIP model for generating embeddings."""
-        if not CLIP_AVAILABLE:
-            logger.warning("CLIP not available - embedding generation disabled")
-            self.clip_model = None
-            self.clip_preprocess = None
-            return
-
-        try:
-            logger.info("Initializing CLIP model for embeddings...")
-            self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=self.device)
-            self.clip_model.eval()
-            logger.info(f"CLIP model initialized on device: {self.device}")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize CLIP: {e}")
-            self.clip_model = None
-            self.clip_preprocess = None
-
-    def generate_crop_embedding(self, crop_image):
-        """Generate CLIP embedding for an object crop.
-
-        Args:
-            crop_image: numpy array (H, W, C) in BGR format
-
-        Returns:
-            numpy array of embedding features or None if CLIP not available
-        """
-        if not self.clip_model or not self.clip_preprocess or crop_image is None:
-            return None
-
-        try:
-            # Convert BGR to RGB
-            crop_rgb = cv2.cvtColor(crop_image, cv2.COLOR_BGR2RGB)
-
-            # Convert to PIL Image
-            pil_image = Image.fromarray(crop_rgb)
-
-            # Preprocess for CLIP
-            image_tensor = self.clip_preprocess(pil_image).unsqueeze(0).to(self.device)
-
-            # Generate embedding
-            with torch.no_grad():
-                features = self.clip_model.encode_image(image_tensor)
-                features = features / features.norm(dim=-1, keepdim=True)  # Normalize
-
-            # Convert to numpy and return
-            return features.cpu().numpy().flatten()
-
-        except Exception as e:
-            logger.warning(f"Failed to generate CLIP embedding: {e}")
-            return None
 
     def start_tracking_session(self, motion_event_id: int):
         """Start a new tracking session for a motion event."""
@@ -288,10 +213,6 @@ class ObjectDetector:
                         class_id = int(box.cls[0])
                         class_name = self.yolo_model.names[class_id]
 
-                        # Skip if not in allowed categories
-                        if class_name not in self.allowed_categories:
-                            continue
-
                         # Skip low confidence detections
                         if confidence < 0.5:
                             continue
@@ -307,9 +228,8 @@ class ObjectDetector:
                         if bbox_w < 20 or bbox_h < 20:
                             continue
 
-                        # Extract object crop and generate embedding
+                        # Extract object crop
                         object_crop_bytes = None
-                        crop_embedding = None
                         try:
                             # Ensure coordinates are within frame bounds
                             frame_h, frame_w = frame.shape[:2]
@@ -322,9 +242,6 @@ class ObjectDetector:
                             crop = frame[bbox_y:bbox_y2, bbox_x:bbox_x2]
 
                             if crop.size > 0:
-                                # Generate CLIP embedding from original crop before resizing
-                                crop_embedding = self.generate_crop_embedding(crop)
-
                                 # Resize crop to standardized size (max 200x200, maintain aspect ratio)
                                 h, w = crop.shape[:2]
                                 if h > 200 or w > 200:
@@ -348,8 +265,7 @@ class ObjectDetector:
                             'bbox_y': bbox_y,
                             'bbox_w': bbox_w,
                             'bbox_h': bbox_h,
-                            'crop_bytes': object_crop_bytes,
-                            'crop_embedding': crop_embedding
+                            'crop_bytes': object_crop_bytes
                         }
                         current_detections.append(detection)
 
