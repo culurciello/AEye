@@ -57,6 +57,26 @@ python main.py --video-source  rtsp://192.168.6.244:554/11 --headless
 ```
 
 
+## GStreamer video processor
+
+On some OS X older processor (Macbook Pro M2) the opencv python version is not producing .mp4 files correctly. It fails because of ffmpeg. (eg.: [hevc @ 0xa53c05180] Could not find ref with POC 136). We can use GStreamer on these systems.
+
+To run the GStreamer version you need to manually modify the main.py script and enable the GStreamer video processor.
+
+Install GStreamer on OS X: 
+
+```
+brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
+```
+
+ALso set env:
+
+```
+export PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/bin:$PATH
+```
+
+
+
 ## Web Dashboard Features
 
 ### Interactive Timeline

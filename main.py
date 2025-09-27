@@ -14,7 +14,9 @@ from datetime import datetime, timedelta
 # Import our existing motion detection
 from lib.motion_detector import AdaptiveMotionDetector
 from lib.object_detector import ObjectDetector
-from lib.video_processor import CircularVideoBuffer, VideoSegment, VideoProcessor
+from lib.video_processor import CircularVideoBuffer, VideoSegment
+# from lib.video_processor import VideoProcessor # Original import if using OpenCV backend
+from lib.video_processor_gstreamer import VideoProcessor # Alternative import if using GStreamer backend
 from lib.face_detector import FaceDetector
 from lib.database import DatabaseManager
 
@@ -40,8 +42,6 @@ class MotionTriggeredProcessor:
                  use_gpu: bool = True,
                  image_capture_interval: int = 600,  # 10 minutes in seconds
                  headless: bool = False,
-                 video_backend: str = "opencv",
-                 c_program_path: str = None,
                  camera_device: str = None):
         """
         Initialize the motion triggered processor.
@@ -71,7 +71,6 @@ class MotionTriggeredProcessor:
         self.use_gpu = use_gpu
         self.image_capture_interval = image_capture_interval
         self.headless = headless
-        self.video_backend = video_backend
 
         # Create required directories
         os.makedirs(self.videos_dir, exist_ok=True)
