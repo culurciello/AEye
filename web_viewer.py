@@ -245,7 +245,7 @@ class MotionViewer:
 
             query = """SELECT fd.id, fd.motion_event_id, fd.frame_timestamp,
                               fd.confidence, fd.bbox_x, fd.bbox_y, fd.bbox_width, fd.bbox_height,
-                              fd.created_at, me.video_file
+                              fd.created_at, me.video_file, fd.known_person, fd.recognition_confidence
                        FROM face_detections fd
                        JOIN motion_events me ON fd.motion_event_id = me.id
                        WHERE 1=1"""
@@ -542,7 +542,9 @@ def api_face_detections():
             'bbox_width': detection[6],
             'bbox_height': detection[7],
             'created_at': detection[8],
-            'video_file': detection[9]
+            'video_file': detection[9],
+            'known_person': detection[10] if len(detection) > 10 else None,
+            'recognition_confidence': detection[11] if len(detection) > 11 else None
         }
         detection_list.append(detection_data)
 
@@ -800,7 +802,7 @@ def api_motion_event_detail(event_id):
 
             # Get face detections for this event (exclude binary data and handle data type conversion safely)
             cursor.execute(
-                "SELECT id, frame_timestamp, confidence, bbox_x, bbox_y, bbox_width, bbox_height FROM face_detections WHERE motion_event_id = ?",
+                "SELECT id, frame_timestamp, confidence, bbox_x, bbox_y, bbox_width, bbox_height, known_person FROM face_detections WHERE motion_event_id = ?",
                 (event_id,)
             )
             face_detections = cursor.fetchall()
@@ -815,7 +817,8 @@ def api_motion_event_detail(event_id):
                         'bbox_x': int(fd[3]) if fd[3] is not None and not isinstance(fd[3], bytes) else 0,
                         'bbox_y': int(fd[4]) if fd[4] is not None and not isinstance(fd[4], bytes) else 0,
                         'bbox_width': int(fd[5]) if fd[5] is not None and not isinstance(fd[5], bytes) else 0,
-                        'bbox_height': int(fd[6]) if fd[6] is not None and not isinstance(fd[6], bytes) else 0
+                        'bbox_height': int(fd[6]) if fd[6] is not None and not isinstance(fd[6], bytes) else 0,
+                        'known_person': str(fd[7]) if fd[7] else None
                     }
                     event_data['face_detections'].append(face_detection)
                 except (ValueError, TypeError) as e:

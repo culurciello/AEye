@@ -320,8 +320,15 @@ async function showEventDetails(eventId) {
                             <img src="/api/face_detection/${fd.id}/image"
                                  style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; margin-bottom: 0.25rem;"
                                  onerror="this.style.display='none'">
+                            ${fd.known_person ? `
+                                <div style="font-size: 0.75rem; color: var(--primary); font-weight: 500; margin-bottom: 0.125rem;">
+                                    ${fd.known_person}
+                                </div>
+                            ` : ''}
                             <div style="font-size: 0.75rem; color: var(--text-secondary);">
-                                ${(fd.confidence * 100).toFixed(1)}% confidence
+                                ${fd.known_person && fd.recognition_confidence !== null ?
+                                    `${(fd.recognition_confidence * 100).toFixed(1)}% confidence` :
+                                    `${(fd.confidence * 100).toFixed(1)}% confidence`}
                             </div>
                         </div>
                     `).join('')}

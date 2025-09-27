@@ -36,10 +36,13 @@ class MotionTriggeredProcessor:
                  buffer_duration: int = 120,
                  pre_motion_seconds: int = 30,
                  post_motion_seconds: int = 60,
-                 fps: int = 30,
+                 fps: int = 15,
                  use_gpu: bool = True,
                  image_capture_interval: int = 600,  # 10 minutes in seconds
-                 headless: bool = False):
+                 headless: bool = False,
+                 video_backend: str = "opencv",
+                 c_program_path: str = None,
+                 camera_device: str = None):
         """
         Initialize the motion triggered processor.
 
@@ -55,6 +58,7 @@ class MotionTriggeredProcessor:
             use_gpu: Whether to use GPU for face detection
             image_capture_interval: Seconds between periodic image captures (default: 600 = 10 minutes)
             headless: Skip visualization and display for server/headless mode
+            video_backend: Video backend ('opencv' or 'ffmpeg') for stream reading
         """
         self.video_source = video_source
         self.videos_dir = videos_dir
@@ -67,6 +71,7 @@ class MotionTriggeredProcessor:
         self.use_gpu = use_gpu
         self.image_capture_interval = image_capture_interval
         self.headless = headless
+        self.video_backend = video_backend
 
         # Create required directories
         os.makedirs(self.videos_dir, exist_ok=True)
@@ -100,7 +105,16 @@ class MotionTriggeredProcessor:
         self.face_detector.init_face_detector()
 
         # Initialize video processor
-        self.video_processor = VideoProcessor(self.videos_dir, self.fps, self.pre_motion_seconds, self.post_motion_seconds, self.db_manager)
+        self.video_processor = VideoProcessor(
+            self.videos_dir,
+            self.fps,
+            self.pre_motion_seconds,
+            self.post_motion_seconds,
+            self.db_manager,
+            self.video_backend,
+            c_program_path,
+            camera_device
+        )
         self.video_processor.video_buffer = self.video_buffer
 
         # Pre-initialize video codec
@@ -419,8 +433,8 @@ class MotionTriggeredProcessor:
                     self.last_motion_time = current_time
 
                     # Continue recording
-                    if self.is_recording and self.video_processor.recording_writer:
-                        self.video_processor.recording_writer.write(frame)
+                    if self.is_recording:
+                        self.video_processor.write_frame(frame)
                 
                 else:
                     # No motion detected
@@ -439,8 +453,8 @@ class MotionTriggeredProcessor:
                                 logger.info("Motion ended - Recording queued for processing")
 
                     # Continue recording for a bit after motion stops
-                    if self.is_recording and self.video_processor.recording_writer:
-                        self.video_processor.recording_writer.write(frame)
+                    if self.is_recording:
+                        self.video_processor.write_frame(frame)
                 
                 # Create visualization and display only if not in headless mode
                 if not self.headless:
@@ -494,20 +508,28 @@ def main():
                        help='Video source (camera index or file path)')
     parser.add_argument('--output-dir', default='data/',
                        help='Base output directory (videos/, images/, db/ will be created inside)')
-    parser.add_argument('--buffer-duration', type=int, default=120,
+    parser.add_argument('--buffer-duration', type=int, default=90,
                        help='Circular buffer duration in seconds (default: 120)')
     parser.add_argument('--pre-motion', type=int, default=30,
                        help='Seconds to record before motion (default: 30)')
     parser.add_argument('--post-motion', type=int, default=60,
                        help='Seconds to record after motion (default: 60)')
-    parser.add_argument('--fps', type=int, default=15,
-                       help='Target FPS for processing (default: 15)')
+    parser.add_argument('--fps', type=int, default=30,
+                       help='Target FPS for processing (default: 30)')
     parser.add_argument('--no-gpu', action='store_true',
                        help='Disable GPU usage for face detection')
     parser.add_argument('--image-interval', type=int, default=600,
                        help='Seconds between periodic image captures (default: 600 = 10 minutes)')
     parser.add_argument('--headless', action='store_true',
                        help='Run in headless mode without video display (for servers)')
+    parser.add_argument('--video-backend',
+                       choices=['opencv', 'ffmpeg'],
+                       default='opencv',
+                       help='Video backend for reading streams (ffmpeg or opencv, default: opencv)')
+    parser.add_argument('--c-program-path',
+                       help='Path to C video capture program (auto-detected if not specified)')
+    parser.add_argument('--camera-device',
+                       help='Camera device (e.g., /dev/video0 for Linux, 0 for macOS)')
     parser.add_argument('--log-level',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO',
@@ -555,7 +577,10 @@ def main():
             fps=args.fps,
             use_gpu=not args.no_gpu,
             image_capture_interval=args.image_interval,
-            headless=args.headless
+            headless=args.headless,
+            video_backend=args.video_backend,
+            c_program_path=args.c_program_path,
+            camera_device=args.camera_device
         )
         
         # Run processor
