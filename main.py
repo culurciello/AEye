@@ -111,8 +111,6 @@ class MotionTriggeredProcessor:
             self.pre_motion_seconds,
             self.post_motion_seconds,
             self.db_manager,
-            self.video_backend,
-            c_program_path,
             camera_device
         )
         self.video_processor.video_buffer = self.video_buffer
@@ -522,12 +520,6 @@ def main():
                        help='Seconds between periodic image captures (default: 600 = 10 minutes)')
     parser.add_argument('--headless', action='store_true',
                        help='Run in headless mode without video display (for servers)')
-    parser.add_argument('--video-backend',
-                       choices=['opencv', 'ffmpeg'],
-                       default='opencv',
-                       help='Video backend for reading streams (ffmpeg or opencv, default: opencv)')
-    parser.add_argument('--c-program-path',
-                       help='Path to C video capture program (auto-detected if not specified)')
     parser.add_argument('--camera-device',
                        help='Camera device (e.g., /dev/video0 for Linux, 0 for macOS)')
     parser.add_argument('--log-level',
@@ -578,8 +570,6 @@ def main():
             use_gpu=not args.no_gpu,
             image_capture_interval=args.image_interval,
             headless=args.headless,
-            video_backend=args.video_backend,
-            c_program_path=args.c_program_path,
             camera_device=args.camera_device
         )
         
