@@ -65,16 +65,33 @@ To run the GStreamer version you need to manually modify the main.py script and 
 
 Install GStreamer on OS X: 
 
-```
+```bash
+# Ubuntu/Debian
+sudo apt-get install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly python3-gi
+
+# macOS
 brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
-```
 
-ALso set env:
-
-```
+#set env:
 export PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/bin:$PATH
 ```
 
+The GStreamer implementation is specifically optimized for RTSP sources:
+- Uses `tune=zerolatency` for minimal delay
+- Configures `is-live=True` for streaming sources
+- Supports hardware acceleration for encoding
+- Better memory management for continuous streaming
+
+Choose GStreamer when:
+- Working with RTSP cameras
+- Need low latency recording
+- Want hardware acceleration
+- Require professional encoding options
+
+Choose OpenCV when:
+- Simple USB camera setup
+- Minimal dependencies preferred
+- Prototyping or testing
 
 
 ## Web Dashboard Features

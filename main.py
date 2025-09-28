@@ -14,9 +14,9 @@ from datetime import datetime, timedelta
 # Import our existing motion detection
 from lib.motion_detector import AdaptiveMotionDetector
 from lib.object_detector import ObjectDetector
-from lib.video_processor import CircularVideoBuffer, VideoSegment
-# from lib.video_processor import VideoProcessor # Original import if using OpenCV backend
-from lib.video_processor_gstreamer import VideoProcessor # Alternative import if using GStreamer backend
+# from lib.video_processor import CircularVideoBuffer, VideoSegment, VideoProcessor # Original import if using OpenCV backend
+from lib.video_processor_opencv_advanced import CircularVideoBuffer, VideoSegment, VideoProcessor # Alternative advanced opencv backend
+# from lib.video_processor_gstreamer import CircularVideoBuffer, VideoSegment, VideoProcessor # Alternative import if using GStreamer backend
 from lib.face_detector import FaceDetector
 from lib.database import DatabaseManager
 
@@ -107,11 +107,13 @@ class MotionTriggeredProcessor:
         self.video_processor = VideoProcessor(
             self.videos_dir,
             self.fps,
-            self.pre_motion_seconds,
-            self.post_motion_seconds,
-            self.db_manager,
-            camera_device
+            rtsp_url=None,
+            pre_motion_seconds=self.pre_motion_seconds,
+            post_motion_seconds=self.post_motion_seconds,
+            db_manager=self.db_manager,
+            camera_device=camera_device,
         )
+
         self.video_processor.video_buffer = self.video_buffer
 
         # Pre-initialize video codec

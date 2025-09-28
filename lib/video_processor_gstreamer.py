@@ -30,6 +30,7 @@ except Exception as e:
 import numpy as np
 import logging
 import threading
+import queue
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Tuple, Optional, List
@@ -97,6 +98,159 @@ class CircularVideoBuffer:
         return selected_frames
 
 
+class RTSPReader:
+    """GStreamer-based RTSP reader that handles HEVC streams properly."""
+    
+    def __init__(self, rtsp_url: str, width: int = 1920, height: int = 1080):
+        self.rtsp_url = rtsp_url
+        self.width = width
+        self.height = height
+        self.pipeline = None
+        self.appsink = None
+        self.frame_queue = queue.Queue(maxsize=10)
+        self.is_running = False
+        self.main_loop = None
+        self.loop_thread = None
+        self._setup_pipeline()
+    
+    def _setup_pipeline(self):
+        """Setup GStreamer pipeline for RTSP reading with proper HEVC handling."""
+        try:
+            Gst.init(None)
+            
+            # Build pipeline string with proper RTSP and HEVC handling
+            # Use TCP transport and proper buffering to avoid POC errors
+            pipeline_str = (
+                f"rtspsrc location={self.rtsp_url} "
+                f"protocols=tcp "  # Force TCP to avoid packet loss
+                f"latency=200 "  # Add latency buffer
+                f"buffer-mode=auto "  # Auto buffering
+                f"drop-on-latency=true "  # Drop frames if too late
+                f"do-retransmission=true ! "  # Enable retransmission
+                f"rtph265depay ! "  # HEVC/H.265 depayloader
+                f"h265parse ! "  # Parse HEVC stream
+                f"queue max-size-buffers=100 max-size-time=0 max-size-bytes=0 ! "  # Buffer frames
+                f"decodebin ! "  # Auto-detect and decode
+                f"videoconvert ! "  # Convert to required format
+                f"video/x-raw,format=BGR,width={self.width},height={self.height} ! "
+                f"appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true"
+            )
+            
+            logger.info(f"RTSP GStreamer pipeline: {pipeline_str}")
+            self.pipeline = Gst.parse_launch(pipeline_str)
+            
+            if not self.pipeline:
+                logger.error("Failed to create RTSP GStreamer pipeline")
+                return
+            
+            # Get appsink element
+            self.appsink = self.pipeline.get_by_name("sink")
+            if not self.appsink:
+                logger.error("Failed to get appsink element")
+                return
+            
+            # Connect to new-sample signal
+            self.appsink.connect("new-sample", self._on_new_sample)
+            
+            # Set up bus to monitor errors
+            bus = self.pipeline.get_bus()
+            bus.add_signal_watch()
+            bus.connect("message::error", self._on_error)
+            bus.connect("message::warning", self._on_warning)
+            
+            # Start the pipeline
+            ret = self.pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                logger.error("Failed to start RTSP GStreamer pipeline")
+                return
+            
+            self.is_running = True
+            
+            # Start GLib main loop in separate thread
+            self.main_loop = GLib.MainLoop()
+            self.loop_thread = threading.Thread(target=self.main_loop.run, daemon=True)
+            self.loop_thread.start()
+            
+            logger.info(f"RTSP reader initialized for {self.rtsp_url}")
+            
+        except Exception as e:
+            logger.error(f"Error setting up RTSP GStreamer pipeline: {e}")
+            self.is_running = False
+    
+    def _on_new_sample(self, sink):
+        """Callback for new frames from the RTSP stream."""
+        sample = sink.emit("pull-sample")
+        if sample:
+            buffer = sample.get_buffer()
+            caps = sample.get_caps()
+            
+            # Extract frame data
+            success, map_info = buffer.map(Gst.MapFlags.READ)
+            if success:
+                # Get frame dimensions from caps if needed
+                structure = caps.get_structure(0)
+                width = structure.get_value("width")
+                height = structure.get_value("height")
+                
+                # Convert to numpy array
+                frame_data = np.ndarray(
+                    shape=(height, width, 3),
+                    dtype=np.uint8,
+                    buffer=map_info.data
+                )
+                
+                # Make a copy to avoid memory issues
+                frame = frame_data.copy()
+                
+                # Add to queue (non-blocking)
+                try:
+                    self.frame_queue.put_nowait((frame, datetime.now()))
+                except queue.Full:
+                    # Drop oldest frame if queue is full
+                    try:
+                        self.frame_queue.get_nowait()
+                        self.frame_queue.put_nowait((frame, datetime.now()))
+                    except:
+                        pass
+                
+                buffer.unmap(map_info)
+        
+        return Gst.FlowReturn.OK
+    
+    def _on_error(self, bus, message):
+        """Handle pipeline errors."""
+        err, debug = message.parse_error()
+        logger.error(f"RTSP Pipeline error: {err}, Debug: {debug}")
+        
+    def _on_warning(self, bus, message):
+        """Handle pipeline warnings."""
+        err, debug = message.parse_warning()
+        logger.warning(f"RTSP Pipeline warning: {err}, Debug: {debug}")
+    
+    def get_frame(self, timeout: float = 0.1) -> Tuple[Optional[np.ndarray], Optional[datetime]]:
+        """Get a frame from the RTSP stream."""
+        try:
+            frame, timestamp = self.frame_queue.get(timeout=timeout)
+            return frame, timestamp
+        except queue.Empty:
+            return None, None
+    
+    def stop(self):
+        """Stop the RTSP reader."""
+        self.is_running = False
+        
+        if self.pipeline:
+            self.pipeline.set_state(Gst.State.NULL)
+        
+        if self.main_loop and self.main_loop.is_running():
+            self.main_loop.quit()
+        
+        if self.loop_thread and self.loop_thread.is_alive():
+            self.loop_thread.join(timeout=3.0)
+        
+        logger.info("RTSP reader stopped")
+
+
 class GStreamerVideoWriter:
     """GStreamer-based video writer for RTSP compatibility."""
 
@@ -117,7 +271,7 @@ class GStreamerVideoWriter:
         try:
             Gst.init(None)
 
-            # Create pipeline string with proper MP4 muxing for OpenCV compatibility
+            # Create pipeline string with proper MP4 muxing
             pipeline_str = (
                 f"appsrc name=source ! "
                 f"videoconvert ! "
@@ -127,11 +281,11 @@ class GStreamerVideoWriter:
                 f"filesink location={self.file_path}"
             )
 
-            logger.info(f"GStreamer pipeline: {pipeline_str}")
+            logger.info(f"Writer pipeline: {pipeline_str}")
             self.pipeline = Gst.parse_launch(pipeline_str)
 
             if not self.pipeline:
-                logger.error("Failed to create GStreamer pipeline")
+                logger.error("Failed to create writer pipeline")
                 return
 
             # Get appsrc element
@@ -149,7 +303,7 @@ class GStreamerVideoWriter:
             # Start the pipeline
             ret = self.pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
-                logger.error("Failed to start GStreamer pipeline")
+                logger.error("Failed to start writer pipeline")
                 return
 
             self.is_opened = True
@@ -160,7 +314,7 @@ class GStreamerVideoWriter:
             self.loop_thread.start()
 
         except Exception as e:
-            logger.error(f"Error setting up GStreamer pipeline: {e}")
+            logger.error(f"Error setting up writer pipeline: {e}")
             self.is_opened = False
 
     def isOpened(self) -> bool:
@@ -175,7 +329,6 @@ class GStreamerVideoWriter:
         try:
             # Ensure frame is the right size
             if frame.shape[:2] != (self.height, self.width):
-                # Resize frame if needed
                 import cv2
                 frame = cv2.resize(frame, (self.width, self.height))
 
@@ -206,7 +359,6 @@ class GStreamerVideoWriter:
             # Wait for EOS to propagate through the pipeline
             bus = self.pipeline.get_bus()
             if bus:
-                # Wait up to 3 seconds for EOS message
                 msg = bus.timed_pop_filtered(3 * Gst.SECOND, Gst.MessageType.EOS | Gst.MessageType.ERROR)
                 if msg:
                     if msg.type == Gst.MessageType.ERROR:
@@ -215,7 +367,7 @@ class GStreamerVideoWriter:
                     else:
                         logger.info("EOS received, file properly finalized")
                 else:
-                    logger.warning("Timeout waiting for EOS, file may be incomplete")
+                    logger.warning("Timeout waiting for EOS")
 
             # Stop the pipeline
             self.pipeline.set_state(Gst.State.NULL)
@@ -227,13 +379,16 @@ class GStreamerVideoWriter:
             self.loop_thread.join(timeout=3.0)
 
         self.is_opened = False
-        logger.info(f"Released GStreamer video writer: {self.file_path}")
+        logger.info(f"Released video writer: {self.file_path}")
 
 
 class VideoProcessor:
-    def __init__(self, videos_dir: str, fps: int, pre_motion_seconds: int = 30, post_motion_seconds: int = 30, db_manager=None, camera_device=None):
+    def __init__(self, videos_dir: str, fps: int, rtsp_url: str = None, 
+                 pre_motion_seconds: int = 30, post_motion_seconds: int = 30, 
+                 db_manager=None, camera_device=None):
         self.videos_dir = videos_dir
         self.fps = fps
+        self.rtsp_url = rtsp_url
         self.pre_motion_seconds = pre_motion_seconds
         self.post_motion_seconds = post_motion_seconds
         self.db_manager = db_manager
@@ -243,9 +398,60 @@ class VideoProcessor:
         self.current_recording_path = None
         self.recording_writer = None
         self.recording_frame_size = None
-
+        
+        # RTSP reader
+        self.rtsp_reader = None
+        
         # Initialize GStreamer
         Gst.init(None)
+        
+        # Start RTSP capture if URL provided
+        if self.rtsp_url:
+            self.start_rtsp_capture()
+
+    def start_rtsp_capture(self):
+        """Start capturing from RTSP stream."""
+        if not self.rtsp_url:
+            logger.error("No RTSP URL provided")
+            return False
+        
+        try:
+            # Initialize RTSP reader with proper HEVC handling
+            self.rtsp_reader = RTSPReader(self.rtsp_url)
+            logger.info(f"Started RTSP capture from {self.rtsp_url}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start RTSP capture: {e}")
+            return False
+    
+    def stop_rtsp_capture(self):
+        """Stop RTSP capture."""
+        if self.rtsp_reader:
+            self.rtsp_reader.stop()
+            self.rtsp_reader = None
+            logger.info("Stopped RTSP capture")
+    
+    def get_frame(self) -> Tuple[Optional[np.ndarray], Optional[datetime]]:
+        """Get a frame from the RTSP stream."""
+        if self.rtsp_reader:
+            return self.rtsp_reader.get_frame()
+        return None, None
+    
+    def process_frames(self):
+        """Main loop to process frames from RTSP."""
+        while self.rtsp_reader and self.rtsp_reader.is_running:
+            frame, timestamp = self.get_frame()
+            
+            if frame is not None:
+                # Add to circular buffer
+                self.video_buffer.add_frame(frame, timestamp)
+                
+                # Write to active recording if needed
+                if self.is_recording:
+                    self.write_frame(frame)
+                
+                # Yield frame for motion detection or other processing
+                yield frame, timestamp
 
     def get_daily_directory(self, base_dir: str, date: datetime) -> str:
         """Get the daily directory path for a given date and ensure it exists."""
@@ -259,17 +465,12 @@ class VideoProcessor:
         logger.info("Warming up GStreamer video writer...")
 
         try:
-            # Create a temporary test video file
             test_path = os.path.join(self.videos_dir, "test_warmup_gst.mp4")
-
-            # Default resolution for warmup
             width, height = 640, 480
 
-            # Initialize GStreamer video writer with the same settings we'll use for recording
             test_writer = GStreamerVideoWriter(test_path, self.fps, width, height)
 
             if test_writer.isOpened():
-                # Write a few dummy frames to initialize the pipeline
                 dummy_frame = np.zeros((height, width, 3), dtype=np.uint8)
                 dummy_frame.fill(128)
 
@@ -278,20 +479,18 @@ class VideoProcessor:
 
                 test_writer.release()
 
-                # Clean up test file
                 if os.path.exists(test_path):
                     os.remove(test_path)
 
                 logger.info("GStreamer video writer warm-up completed")
             else:
-                logger.warning("Could not initialize GStreamer video writer during warm-up")
+                logger.warning("Could not initialize video writer during warm-up")
 
         except Exception as e:
-            logger.warning(f"GStreamer video writer warm-up failed: {e}")
+            logger.warning(f"Video writer warm-up failed: {e}")
 
     def start_recording(self, trigger_time: datetime) -> str:
         """Start recording a motion-triggered video segment."""
-        # Get daily directory for videos
         daily_video_dir = self.get_daily_directory(self.videos_dir, trigger_time)
 
         timestamp_str = trigger_time.strftime("%Y%m%d_%H%M%S")
@@ -302,14 +501,13 @@ class VideoProcessor:
         if self.video_buffer.frames:
             height, width = self.video_buffer.frames[-1].shape[:2]
         else:
-            # Default resolution
             width, height = 1280, 720
 
         # Initialize GStreamer video writer
         self.recording_writer = GStreamerVideoWriter(file_path, self.fps, width, height)
 
         if not self.recording_writer.isOpened():
-            logger.error(f"Failed to open GStreamer video writer for {file_path}")
+            logger.error(f"Failed to open video writer for {file_path}")
             return None
 
         self.current_recording_path = file_path
@@ -320,14 +518,14 @@ class VideoProcessor:
         frames_around = self.video_buffer.get_frames_around_time(
             trigger_time,
             self.pre_motion_seconds,
-            0  # Don't get post frames yet
+            0
         )
 
         for frame, _ in frames_around:
             if frame.shape[:2] == self.recording_frame_size:
                 self.recording_writer.write(frame)
 
-        logger.info(f"Started GStreamer recording: {file_path}")
+        logger.info(f"Started recording: {file_path}")
         return file_path
 
     def stop_recording(self, end_time: datetime, start_time: datetime) -> Optional[VideoSegment]:
@@ -338,7 +536,7 @@ class VideoProcessor:
         # Write post-motion frames from buffer
         frames_around = self.video_buffer.get_frames_around_time(
             end_time,
-            0,  # Don't get pre frames again
+            0,
             self.post_motion_seconds
         )
 
@@ -364,7 +562,7 @@ class VideoProcessor:
         if self.db_manager:
             self.db_manager.store_motion_event(segment)
 
-        logger.info(f"Stopped GStreamer recording: {self.current_recording_path}")
+        logger.info(f"Stopped recording: {self.current_recording_path}")
         self.current_recording_path = None
 
         return segment
@@ -372,8 +570,39 @@ class VideoProcessor:
     def write_frame(self, frame: np.ndarray):
         """Write a frame to the current recording if active."""
         if self.is_recording and self.recording_writer and self.recording_writer.isOpened():
-            # Ensure frame dimensions match the recording dimensions
             if hasattr(self, 'recording_frame_size') and frame.shape[:2] == self.recording_frame_size:
                 self.recording_writer.write(frame)
             else:
                 logger.warning(f"Frame size mismatch: {frame.shape[:2]} vs {getattr(self, 'recording_frame_size', 'unknown')}")
+
+
+# Example usage
+if __name__ == "__main__":
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # Initialize processor with RTSP URL
+    processor = VideoProcessor(
+        videos_dir="./videos",
+        fps=30,
+        rtsp_url="rtsp://192.168.6.244:554/11"
+    )
+    
+    try:
+        # Process frames from RTSP
+        for frame, timestamp in processor.process_frames():
+            # Here you would do motion detection or other processing
+            # For now, just show that we're getting frames
+            if frame is not None:
+                logger.info(f"Got frame at {timestamp}")
+                
+                # Example: simulate motion detection and recording
+                # if motion_detected:
+                #     processor.start_recording(timestamp)
+                # elif was_recording and not motion_detected:
+                #     processor.stop_recording(timestamp, start_timestamp)
+    
+    except KeyboardInterrupt:
+        logger.info("Stopping...")
+    finally:
+        processor.stop_rtsp_capture()
