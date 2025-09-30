@@ -13,6 +13,20 @@ AEye: An AI-powered motion detection system with real-time object recognition, f
 - **Date-based Organization**: Automatic file and database organization by date
 - **Multi-Source Support**: Webcams, IP cameras, RTSP streams, and video files
 
+
+## Installation
+
+`pip install -r requirements.txt`
+
+
+#### For insightface:
+
+```
+sudo apt update
+sudo apt install python3.13-dev
+```
+
+
 ## Quick Start
 
 ### 1. Start Motion Detection System
@@ -56,42 +70,6 @@ python3 processor.py video.mp4 --confidence 0.5 --model yolov8s.pt
 python main.py --video-source  rtsp://192.168.6.244:554/11 --headless
 ```
 
-
-## GStreamer video processor
-
-On some OS X older processor (Macbook Pro M2) the opencv python version is not producing .mp4 files correctly. It fails because of ffmpeg. (eg.: [hevc @ 0xa53c05180] Could not find ref with POC 136). We can use GStreamer on these systems.
-
-To run the GStreamer version you need to manually modify the main.py script and enable the GStreamer video processor.
-
-Install GStreamer on OS X: 
-
-```bash
-# Ubuntu/Debian
-sudo apt-get install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly python3-gi
-
-# macOS
-brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
-
-#set env:
-export PATH=/Library/Frameworks/GStreamer.framework/Versions/1.0/bin:$PATH
-```
-
-The GStreamer implementation is specifically optimized for RTSP sources:
-- Uses `tune=zerolatency` for minimal delay
-- Configures `is-live=True` for streaming sources
-- Supports hardware acceleration for encoding
-- Better memory management for continuous streaming
-
-Choose GStreamer when:
-- Working with RTSP cameras
-- Need low latency recording
-- Want hardware acceleration
-- Require professional encoding options
-
-Choose OpenCV when:
-- Simple USB camera setup
-- Minimal dependencies preferred
-- Prototyping or testing
 
 
 ## Web Dashboard Features

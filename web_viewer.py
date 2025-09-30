@@ -6,11 +6,42 @@ import sqlite3
 import json
 import cv2
 import argparse
+import pickle
+import struct
 from datetime import datetime, timedelta
 import glob
 from typing import List, Dict, Optional
 
 app = Flask(__name__)
+
+def extract_confidence_value(confidence_data):
+    """Extract confidence value from database data (handles both binary and numeric)."""
+    if confidence_data is None:
+        return 0.0
+
+    if isinstance(confidence_data, (int, float)):
+        return float(confidence_data)
+
+    if isinstance(confidence_data, bytes):
+        try:
+            # Try to unpickle numpy scalar first
+            value = pickle.loads(confidence_data)
+            # Check if it's a numpy scalar or regular float
+            if hasattr(value, 'item'):  # numpy scalars have .item() method
+                return float(value.item())
+            elif isinstance(value, (int, float)):
+                return float(value)
+        except Exception:
+            # Fallback to struct unpack for binary float
+            try:
+                if len(confidence_data) == 4:
+                    return struct.unpack('f', confidence_data)[0]
+                elif len(confidence_data) == 8:
+                    return struct.unpack('d', confidence_data)[0]
+            except Exception:
+                pass
+
+    return 0.0
 
 class MotionViewer:
     def __init__(self, base_path: str = "data", date: str = None):
@@ -813,7 +844,7 @@ def api_motion_event_detail(event_id):
                     face_detection = {
                         'id': int(fd[0]),
                         'frame_timestamp': str(fd[1]) if fd[1] else None,
-                        'confidence': float(fd[2]) if fd[2] is not None and not isinstance(fd[2], bytes) else 0.0,
+                        'confidence': extract_confidence_value(fd[2]),
                         'bbox_x': int(fd[3]) if fd[3] is not None and not isinstance(fd[3], bytes) else 0,
                         'bbox_y': int(fd[4]) if fd[4] is not None and not isinstance(fd[4], bytes) else 0,
                         'bbox_width': int(fd[5]) if fd[5] is not None and not isinstance(fd[5], bytes) else 0,

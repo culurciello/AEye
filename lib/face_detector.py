@@ -4,7 +4,13 @@ import logging
 import os
 import glob
 from datetime import datetime
-from insightface.app import FaceAnalysis
+
+try:
+    from insightface.app import FaceAnalysis
+    INSIGHTFACE_AVAILABLE = True
+except ImportError:
+    INSIGHTFACE_AVAILABLE = False
+    FaceAnalysis = None
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +25,11 @@ class FaceDetector:
 
     def init_face_detector(self):
         """Initialize and warm up face detection using InsightFace."""
+        if not INSIGHTFACE_AVAILABLE:
+            logger.error("InsightFace library not available. Face detection disabled.")
+            self.face_app = None
+            return
+
         try:
             logger.info("Initializing InsightFace neural networks...")
             self.face_app = FaceAnalysis(allowed_modules=['detection', 'recognition'])
@@ -230,7 +241,7 @@ class FaceDetector:
 
                 for face in faces:
                     bbox = face.bbox.astype(int)
-                    confidence = face.det_score
+                    confidence = float(face.det_score)
 
                     # Skip low confidence detections
                     if confidence < 0.7:
