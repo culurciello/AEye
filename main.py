@@ -253,7 +253,7 @@ class MotionTriggeredProcessor:
             segment.detection_count = total_objects
 
             # Update the database with processing results
-            self.db_manager.update_motion_event_processing(motion_event_id, total_faces, total_objects)
+            self.db_manager.update_motion_event_counts(motion_event_id, total_faces, total_objects)
 
             logger.info(f"Processed video: {segment.file_path} - Found {total_faces} faces, {total_objects} total objects")
 
@@ -520,9 +520,38 @@ class MotionTriggeredProcessor:
 
                 # Create visualization and display only if not in headless mode
                 if not self.headless:
-                    output_frame = self.motion_detector.visualize_results(
-                        frame, motion_mask, motion_regions, motion_detected
-                    )
+                    output_frame = frame.copy()
+
+                    # Run object detection and draw bounding boxes
+                    if self.yolo_model:
+                        try:
+                            results = self.yolo_model(frame, verbose=False)
+                            for result in results:
+                                boxes = result.boxes
+                                if boxes is not None:
+                                    for box in boxes:
+                                        confidence = float(box.conf[0])
+                                        if confidence > 0.5:
+                                            # Get box coordinates
+                                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+                                            # Get class name
+                                            class_id = int(box.cls[0])
+                                            class_name = self.yolo_model.names[class_id]
+
+                                            # Draw bounding box
+                                            cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                                            # Draw label with confidence
+                                            label = f"{class_name} {confidence:.2f}"
+                                            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                                            cv2.rectangle(output_frame, (x1, y1 - label_size[1] - 10),
+                                                        (x1 + label_size[0], y1), (0, 255, 0), -1)
+                                            cv2.putText(output_frame, label, (x1, y1 - 5),
+                                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                        except Exception as e:
+                            logger.warning(f"Object detection visualization failed: {e}")
 
                     # Add recording indicator
                     if self.is_recording:

@@ -57,14 +57,58 @@ python3 web_viewer.py --date 2025-09-15 --port 3000
 
 Visit http://localhost:3000 to view the interactive timeline with object thumbnails and motion events.
 
-### 3. Optional: Process Existing Videos
+### 3. Run Person Counter Demo
+
+```bash
+# Default webcam
+python3 demo_person_counter.py
+
+# IP camera (RTSP)
+python3 demo_person_counter.py --source "rtsp://username:password@192.168.1.100:554/stream"
+
+# HTTP camera
+python3 demo_person_counter.py --source "http://192.168.1.100:8080/video"
+
+# Enable face recognition (requires known faces in data/faces-known/)
+python3 demo_person_counter.py --face-recognition
+
+# Face recognition with custom known faces directory
+python3 demo_person_counter.py --face-recognition --known-faces-dir /path/to/faces
+
+# Custom confidence threshold
+python3 demo_person_counter.py --confidence 0.7
+
+# Different YOLO model
+python3 demo_person_counter.py --model models/yolov8s.pt
+
+# Full example with all features
+python3 demo_person_counter.py --source 0 --face-recognition --confidence 0.6 --model models/yolov8s.pt
+```
+
+Press **Q** to quit the demo.
+
+**Face Recognition Setup:**
+- Place known face images in `data/faces-known/[person_name]/` directories
+- Each person should have their own subdirectory with one or more face images
+- Supported formats: jpg, jpeg, png, bmp
+- Example structure:
+  ```
+  data/faces-known/
+  ├── john/
+  │   ├── face1.jpg
+  │   └── face2.jpg
+  └── jane/
+      └── face1.jpg
+  ```
+
+### 4. Optional: Process Existing Videos
 
 ```bash
 # Process video file for object detection
 python3 processor.py video.mp4 --confidence 0.5 --model yolov8s.pt
 ```
 
-### 4. Optional: run on headless servers:
+### 5. Optional: run on headless servers:
 
 ```bash
 python main.py --video-source  rtsp://192.168.6.244:554/11 --headless
