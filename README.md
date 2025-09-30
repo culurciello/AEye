@@ -177,6 +177,8 @@ data/
 ## Command Line Options
 
 **Motion Detection System (`main.py`):**
+
+*Basic Options:*
 - `--video-source`: Video source (webcam index, file, or RTSP URL) (default: 0)
 - `--output-dir`: Base output directory (videos/, images/, db/ created inside) (default: data/)
 - `--pre-motion`: Seconds to record before motion (default: 30)
@@ -187,6 +189,26 @@ data/
 - `--no-gpu`: Disable GPU acceleration for face detection
 - `--image-interval`: Seconds between periodic image captures (default: 600)
 - `--log-level`: Set logging level (DEBUG, INFO, WARNING, ERROR)
+
+*Motion Detection Tuning:*
+- `--learning-rate`: Background model learning rate, controls how quickly the background model adapts to changes (0.001-0.1, default: 0.003)
+  - Lower values (0.001-0.003): Slower adaptation, better for stable backgrounds with occasional motion
+  - Higher values (0.01-0.1): Faster adaptation, better for dynamic environments with changing lighting
+- `--history-frames`: Number of consecutive frames required to confirm motion, reduces false positives (default: 3)
+  - Lower values (1-2): More sensitive, faster response to motion
+  - Higher values (4-6): More stable, fewer false alarms from noise
+- `--min-contour-area`: Minimum motion area in pixels to trigger detection, filters out small movements (default: 300)
+  - Lower values (100-200): Detect smaller objects or distant motion
+  - Higher values (500-1000): Only detect larger or closer objects
+- `--noise-kernel`: Morphological kernel size for noise reduction (default: 7)
+  - Smaller values (3-5): Preserve fine details but may have more noise
+  - Larger values (9-11): Better noise reduction but may blur smaller motions
+- `--min-motion-confidence`: Motion confidence threshold (0.0-1.0, default: 0.3)
+  - Lower values (0.1-0.2): More sensitive, detect subtle movements
+  - Higher values (0.4-0.6): Less sensitive, only detect significant motion
+- `--motion-timeout`: Seconds without motion before stopping recording (default: 5.0)
+  - Lower values (2-3): Shorter recordings, stops quickly after motion ends
+  - Higher values (10-15): Longer recordings, captures entire event sequences
 
 **Web Viewer (`web_viewer.py`):**
 - `--base-path`: Data storage path (default: data)
@@ -225,6 +247,28 @@ python3 main.py --video-source 0 --headless
 
 # Background processing with custom settings
 nohup python3 main.py --video-source rtsp://camera --headless --log-level INFO > aeye.log 2>&1 &
+```
+
+### Motion Detection Tuning Examples
+
+```bash
+# High sensitivity for detecting small movements (e.g., indoor monitoring)
+python3 main.py --video-source 0 --min-contour-area 100 --min-motion-confidence 0.2 --history-frames 2
+
+# Low sensitivity for busy environments (e.g., outdoor with wind/trees)
+python3 main.py --video-source rtsp://camera --min-contour-area 800 --min-motion-confidence 0.5 --learning-rate 0.01
+
+# Fast-changing lighting conditions (e.g., clouds, shadows)
+python3 main.py --video-source 0 --learning-rate 0.05 --history-frames 4
+
+# Stable environment with minimal false positives
+python3 main.py --video-source 0 --learning-rate 0.001 --min-motion-confidence 0.4 --history-frames 5
+
+# Long recording sessions (capture entire event sequences)
+python3 main.py --video-source 0 --motion-timeout 15 --post-motion 90
+
+# Quick, short recordings (minimize storage usage)
+python3 main.py --video-source 0 --motion-timeout 2 --post-motion 10 --pre-motion 10
 ```
 
 ### Camera Configuration

@@ -45,7 +45,13 @@ class MotionTriggeredProcessor:
                  image_capture_interval: int = 600,  # 10 minutes in seconds
                  headless: bool = False,
                  camera_device: str = None,
-                 enable_face_detection: bool = True):
+                 enable_face_detection: bool = True,
+                 learning_rate: float = 0.003,
+                 history_frames: int = 3,
+                 min_contour_area: int = 300,
+                 noise_reduction_kernel: int = 7,
+                 min_motion_confidence: float = 0.3,
+                 motion_timeout: float = 5.0):
         """
         Initialize the motion triggered processor.
 
@@ -62,6 +68,12 @@ class MotionTriggeredProcessor:
             image_capture_interval: Seconds between periodic image captures (default: 600 = 10 minutes)
             headless: Skip visualization and display for server/headless mode
             enable_face_detection: Whether to enable face detection (default: True)
+            learning_rate: Background model learning rate (0.001-0.1)
+            history_frames: Number of frames for temporal consistency
+            min_contour_area: Minimum contour area for motion detection
+            noise_reduction_kernel: Kernel size for morphological operations
+            min_motion_confidence: Minimum motion confidence threshold (0.0-1.0)
+            motion_timeout: Seconds without motion before stopping recording
         """
         self.video_source = video_source
         self.videos_dir = videos_dir
@@ -84,17 +96,17 @@ class MotionTriggeredProcessor:
         # Initialize and warm up motion detection
         logger.info("Initializing motion detection...")
         self.motion_detector = AdaptiveMotionDetector(
-            learning_rate=0.003,
-            history_frames=3,
-            min_contour_area=300,
-            noise_reduction_kernel=7
+            learning_rate=learning_rate,
+            history_frames=history_frames,
+            min_contour_area=min_contour_area,
+            noise_reduction_kernel=noise_reduction_kernel
         )
         
         # Warm up motion detector
         self._warmup_motion_detector()
 
         # Initialize motion detection parameters
-        self.min_motion_confidence = 0.3  # Minimum motion confidence threshold
+        self.min_motion_confidence = min_motion_confidence  # Minimum motion confidence threshold
         
         self.video_buffer = CircularVideoBuffer(buffer_duration, fps)
 
@@ -139,7 +151,7 @@ class MotionTriggeredProcessor:
         self.motion_active = False
         self.motion_start_time = None
         self.last_motion_time = None
-        self.motion_timeout = 5.0  # Seconds without motion before stopping recording
+        self.motion_timeout = motion_timeout  # Seconds without motion before stopping recording
         
         # Recording state
         self.is_recording = False
@@ -631,7 +643,21 @@ def main():
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO',
                        help='Set the logging level (default: INFO)')
-    
+
+    # Motion detection parameters
+    parser.add_argument('--learning-rate', type=float, default=0.003,
+                       help='Background model learning rate (0.001-0.1, default: 0.003)')
+    parser.add_argument('--history-frames', type=int, default=3,
+                       help='Number of frames for temporal consistency (default: 3)')
+    parser.add_argument('--min-contour-area', type=int, default=300,
+                       help='Minimum contour area for motion detection in pixels (default: 300)')
+    parser.add_argument('--noise-kernel', type=int, default=7,
+                       help='Noise reduction kernel size (default: 7)')
+    parser.add_argument('--min-motion-confidence', type=float, default=0.3,
+                       help='Minimum motion confidence threshold (0.0-1.0, default: 0.3)')
+    parser.add_argument('--motion-timeout', type=float, default=5.0,
+                       help='Seconds without motion before stopping recording (default: 5.0)')
+
     args = parser.parse_args()
 
     # Create derived paths from base output directory
@@ -677,6 +703,12 @@ def main():
             headless=args.headless,
             camera_device=args.camera_device,
             enable_face_detection=not args.no_face_detection,
+            learning_rate=args.learning_rate,
+            history_frames=args.history_frames,
+            min_contour_area=args.min_contour_area,
+            noise_reduction_kernel=args.noise_kernel,
+            min_motion_confidence=args.min_motion_confidence,
+            motion_timeout=args.motion_timeout,
         )
         
         # Run processor
