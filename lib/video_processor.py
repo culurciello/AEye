@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import os
 import logging
-import subprocess
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Tuple, Optional, List
@@ -174,24 +173,24 @@ class VideoProcessor:
         """Stop recording and create video segment metadata."""
         if not self.is_recording or not self.recording_writer:
             return None
-
+        
         # Write post-motion frames from buffer
         frames_around = self.video_buffer.get_frames_around_time(
-            end_time,
+            end_time, 
             0,  # Don't get pre frames again
             self.post_motion_seconds
         )
-
+        
         for frame, _ in frames_around:
             if self.recording_writer and hasattr(self, 'recording_frame_size') and frame.shape[:2] == self.recording_frame_size:
                 self.recording_writer.write(frame)
-
+        
         # Close video writer
         self.recording_writer.release()
         self.recording_writer = None
         self.is_recording = False
-
-        # Create video segment (but don't store in database yet - wait for detection results)
+        
+        # Create video segment
         segment = VideoSegment(
             start_time=start_time,
             end_time=end_time,
@@ -199,7 +198,11 @@ class VideoProcessor:
             motion_detected=True,
             processed=False
         )
-
+        
+        # Store in database
+        if self.db_manager:
+            self.db_manager.store_motion_event(segment)
+        
         logger.info(f"Stopped recording: {self.current_recording_path}")
         self.current_recording_path = None
 
@@ -213,80 +216,4 @@ class VideoProcessor:
                 self.recording_writer.write(frame)
             else:
                 logger.warning(f"Frame size mismatch: {frame.shape[:2]} vs {getattr(self, 'recording_frame_size', 'unknown')}")
-
-    def start_recording_ffmpeg(self, trigger_time: datetime) -> str:
-        """Start recording using FFmpeg subprocess (more reliable)."""
-        daily_video_dir = self.get_daily_directory(self.videos_dir, trigger_time)
-        timestamp_str = trigger_time.strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp_str}.mp4"
-        file_path = os.path.join(daily_video_dir, filename)
-
-        if self.video_buffer.frames:
-            height, width = self.video_buffer.frames[-1].shape[:2]
-        else:
-            width, height = 1280, 720
-
-        # Use FFmpeg for writing with avc1 codec
-        ffmpeg_cmd = [
-            'ffmpeg',
-            '-y',  # Overwrite output
-            '-f', 'rawvideo',
-            '-s', f'{width}x{height}',
-            '-pix_fmt', 'bgr24',
-            '-r', str(self.fps),
-            '-i', '-',  # Read from stdin
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-crf', '23',
-            '-tag:v', 'avc1',  # Use avc1 codec tag
-            file_path
-        ]
-
-        self.recording_process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        self.current_recording_path = file_path
-        self.recording_frame_size = (height, width)
-        self.is_recording = True
-
-        # Write buffered frames
-        frames_around = self.video_buffer.get_frames_around_time(
-            trigger_time, self.pre_motion_seconds, 0
-        )
-
-        for frame, _ in frames_around:
-            if frame.shape[:2] == self.recording_frame_size:
-                self.recording_process.stdin.write(frame.tobytes())
-
-        logger.info(f"Started FFmpeg recording: {file_path}")
-        return file_path
-
-    def write_frame_ffmpeg(self, frame: np.ndarray):
-        """Write frame using FFmpeg."""
-        if self.is_recording and hasattr(self, 'recording_process'):
-            if frame.shape[:2] == self.recording_frame_size:
-                try:
-                    self.recording_process.stdin.write(frame.tobytes())
-                except Exception as e:
-                    logger.error(f"Failed to write frame to FFmpeg: {e}")
-
-    def verify_recording(self, file_path: str) -> bool:
-        """Verify that video file is being written correctly."""
-        import time
-        time.sleep(1)  # Wait a moment for file to be created
-
-        if not os.path.exists(file_path):
-            logger.error(f"Recording file does not exist: {file_path}")
-            return False
-
-        file_size = os.path.getsize(file_path)
-        if file_size == 0:
-            logger.error(f"Recording file is empty: {file_path}")
-            return False
-
-        logger.info(f"Recording file size: {file_size} bytes")
-        return True
 

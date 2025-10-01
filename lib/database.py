@@ -72,6 +72,12 @@ class DatabaseManager:
             )
         ''')
 
+        # Add columns to existing motion_events table if they don't exist
+        try:
+            cursor.execute('ALTER TABLE motion_events ADD COLUMN track_count INTEGER DEFAULT 0')
+        except:
+            pass  # Column already exists
+
         # Add columns to existing face_detections table if they don't exist
         try:
             cursor.execute('ALTER TABLE face_detections ADD COLUMN known_person TEXT')

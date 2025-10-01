@@ -13,7 +13,7 @@ class AdaptiveMotionDetector:
     def __init__(self, 
                  learning_rate: float = 0.01,
                  history_frames: int = 5,
-                 min_contour_area: int = 300,
+                 min_contour_area: int = 500,
                  noise_reduction_kernel: int = 5):
         """
         Initialize the motion detector.
@@ -88,7 +88,7 @@ class AdaptiveMotionDetector:
         adaptive_threshold = mean_motion + (2.0 * std_motion)
         
         # Clamp between reasonable bounds
-        return np.clip(adaptive_threshold, 0.0025, 0.15)  # 0.5% to 15%
+        return np.clip(adaptive_threshold, 0.005, 0.15)  # 0.5% to 15%
     
     def apply_temporal_consistency(self, current_motion: bool) -> bool:
         """

@@ -71,22 +71,23 @@ async function loadAvailableDates() {
 
 async function loadStats() {
     try {
-        const [motionResponse, faceResponse, objectResponse] = await Promise.all([
+        const [motionResponse, faceResponse, objectResponse, trackResponse] = await Promise.all([
             fetch('/api/stats'),
             fetch('/api/face_stats'),
-            fetch('/api/object_stats')
+            fetch('/api/object_stats'),
+            fetch('/api/track_stats')
         ]);
 
         const motionStats = await motionResponse.json();
         const faceStats = await faceResponse.json();
         const objectStats = await objectResponse.json();
+        const trackStats = await trackResponse.json();
 
         document.getElementById('totalEvents').textContent = motionStats.total_motion_events;
         document.getElementById('totalFaces').textContent = faceStats.total_face_detections;
         document.getElementById('totalObjects').textContent = objectStats.total_object_detections;
+        document.getElementById('totalTracks').textContent = trackStats.total_tracks || 0;
         document.getElementById('processedEvents').textContent = motionStats.processed_events;
-        document.getElementById('avgConfidence').textContent =
-            (faceStats.avg_confidence * 100).toFixed(1) + '%';
 
         // Calculate peak hour from timeline data if available
         if (Object.keys(timelineData).length > 0) {
@@ -295,10 +296,38 @@ async function showEventDetails(eventId) {
                 <strong>Video:</strong> ${event.video_file}<br>
                 <strong>Face Count:</strong> ${event.face_count}<br>
                 <strong>Object Count:</strong> ${event.object_count}<br>
+                <strong>Track Count:</strong> ${event.track_count || 0}<br>
                 <strong>Processed:</strong> ${event.processed ? 'Yes' : 'No'}
             </div>
 
-            ${event.object_detections && event.object_detections.length > 0 ? `
+            ${event.object_tracks && event.object_tracks.length > 0 ? `
+                <h4 style="margin-bottom: 0.5rem;">Object Tracks (${event.object_tracks.length})</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;">
+                    ${event.object_tracks.map(track => {
+                        const duration = track.duration_seconds ? track.duration_seconds.toFixed(1) : 'N/A';
+                        return `
+                        <div style="border: 1px solid var(--border-light); padding: 0.75rem; border-radius: 4px; background: var(--background);">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <img src="${track.crop_url}"
+                                     style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border-light);"
+                                     onerror="this.style.display='none'">
+                                <div style="flex: 1;">
+                                    <div style="font-weight: 600; color: var(--warning-color); margin-bottom: 0.25rem;">${track.class_name}</div>
+                                    <div style="font-size: 0.7rem; color: var(--text-secondary);">
+                                        ${track.detection_count} detections
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary); line-height: 1.4;">
+                                Duration: ${duration}s<br>
+                                Confidence: ${(track.avg_confidence * 100).toFixed(1)}%
+                            </div>
+                        </div>
+                    `}).join('')}
+                </div>
+            ` : ''}
+
+            ${!event.object_tracks?.length && event.object_detections && event.object_detections.length > 0 ? `
                 <h4 style="margin-bottom: 0.5rem;">Object Detections (${event.object_detections.length})</h4>
                 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
                     ${event.object_detections.map(od => `
