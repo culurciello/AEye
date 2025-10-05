@@ -142,7 +142,47 @@ python3 web_viewer.py --host 0.0.0.0 --port 3000
 python3 web_viewer.py --date 2025-09-15 --port 3000
 ```
 
+#### Data Reports
 
+At any point in time, you can run a timeline of events that also clusters similar events together.
+
+To generate a html report clustering detections of people, faces and vehicles, run:
+
+
+```bash
+
+# Default (enhanced settings)
+python scripts/timeline.py
+
+# Even stricter clustering (more clusters)
+python scripts/timeline.py --vehicle-eps 0.06 --color-weight 0.6
+
+# Group more aggressively (fewer clusters, must be VERY similar)
+python scripts/timeline.py --vehicle-eps 0.05 --vehicle-min-samples 2
+
+# Focus mostly on color (70% color, 30% appearance)
+python scripts/timeline.py --color-weight 0.7 --vehicle-eps 0.08
+
+# Focus mostly on appearance (30% color, 70% appearance)
+python scripts/timeline.py --color-weight 0.3 --vehicle-eps 0.10
+
+# Extract ReID features
+python scripts/extract_reid_features.py
+
+# Generate report with ReID
+python scripts/timeline.py --use-reid
+```
+
+How to Tune:
+
+If cars in same cluster are still too different:
+- ⬇️ Decrease --vehicle-eps (try 0.06 or 0.05)
+- ⬆️ Increase --color-weight (try 0.6 or 0.7)
+- ⬆️ Increase --vehicle-min-samples (try 2 or 3)
+
+If you have too many tiny clusters:
+- ⬆️ Increase --vehicle-eps (try 0.10 or 0.12)
+- ⬇️ Decrease --color-weight (try 0.3 or 0.4)
 
 
 ## Face Recognition Setup

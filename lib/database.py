@@ -113,6 +113,12 @@ class DatabaseManager:
         except:
             pass  # Column already exists
 
+        # Add object_embedding column to existing object_detections table if it doesn't exist
+        try:
+            cursor.execute('ALTER TABLE object_detections ADD COLUMN object_embedding BLOB')
+        except:
+            pass  # Column already exists
+
         # Create object tracks table for organizing detections
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS object_tracks (
@@ -217,7 +223,8 @@ class DatabaseManager:
 
     def store_object_detection(self, motion_event_id: int, frame_time: datetime,
                               class_name: str, confidence: float,
-                              x: int, y: int, w: int, h: int, object_crop: bytes = None, track_id: int = None) -> int:
+                              x: int, y: int, w: int, h: int, object_crop: bytes = None,
+                              object_embedding: np.ndarray = None, track_id: int = None) -> int:
         """Store an object detection in the database.
 
         Args:
@@ -227,6 +234,8 @@ class DatabaseManager:
             confidence: Detection confidence score
             x, y, w, h: Bounding box coordinates
             object_crop: Object crop image as bytes
+            object_embedding: Object embedding vector from CLIP
+            track_id: Associated track ID
 
         Returns:
             The ID of the created object detection
@@ -234,13 +243,16 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # Serialize embedding if provided
+        embedding_bytes = pickle.dumps(object_embedding) if object_embedding is not None else None
+
         cursor.execute('''
             INSERT INTO object_detections
             (motion_event_id, frame_timestamp, class_name, confidence,
-             bbox_x, bbox_y, bbox_width, bbox_height, object_crop, track_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             bbox_x, bbox_y, bbox_width, bbox_height, object_crop, object_embedding, track_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (motion_event_id, frame_time, class_name, confidence,
-              x, y, w, h, object_crop, track_id))
+              x, y, w, h, object_crop, embedding_bytes, track_id))
 
         object_detection_id = cursor.lastrowid
         conn.commit()

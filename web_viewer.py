@@ -1058,12 +1058,8 @@ def api_object_detection_image(detection_id):
 
             cropped_object = frame[y1:y2, x1:x2]
 
-            # Resize crop to standard thumbnail size
-            thumbnail_size = (80, 80)
-            cropped_resized = cv2.resize(cropped_object, thumbnail_size)
-
-            # Encode to JPEG
-            _, buffer = cv2.imencode('.jpg', cropped_resized)
+            # Encode to JPEG (full size crop, no resize)
+            _, buffer = cv2.imencode('.jpg', cropped_object)
 
             return Response(buffer.tobytes(), mimetype='image/jpeg')
 

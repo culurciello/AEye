@@ -24,11 +24,13 @@ class VideoProcessor:
 
     def __init__(self,
                  videos_dir: str = "data/videos",
+                 images_dir: str = "data/images",
                  db_path: str = "data/db/detections.db",
                  use_gpu: bool = True,
                  skip_processed: bool = True,
                  file_age_threshold: int = 60,
-                 delete_empty: bool = True):
+                 delete_empty: bool = True,
+                 image_save_interval: int = 600):
         """
         Initialize the video processor.
 
@@ -39,6 +41,7 @@ class VideoProcessor:
             skip_processed: Skip videos already marked as processed in database
             file_age_threshold: Minimum age (in seconds) for a file to be considered complete (default: 60)
             delete_empty: Delete videos with no detections (default: True)
+            image_save_interval: Save one image every N seconds (default: 600 = 10 minutes)
         """
         self.videos_dir = videos_dir
         self.db_path = db_path
@@ -46,6 +49,8 @@ class VideoProcessor:
         self.skip_processed = skip_processed
         self.file_age_threshold = file_age_threshold
         self.delete_empty = delete_empty
+        self.image_save_interval = image_save_interval
+        self.images_dir = images_dir
 
         # Initialize database manager
         self.db_manager = DatabaseManager(self.db_path)
@@ -138,6 +143,28 @@ class VideoProcessor:
 
         return False
 
+    def save_periodic_image(self, frame, frame_time: datetime, video_filename: str):
+        """Save a frame as an image in the date-organized images directory.
+
+        Args:
+            frame: The video frame to save
+            frame_time: The timestamp of the frame
+            video_filename: The name of the video file being processed
+        """
+        # Create date-based directory structure (YYYY_MM_DD)
+        date_str = frame_time.strftime("%Y_%m_%d")
+        daily_images_dir = os.path.join(self.images_dir, date_str)
+        os.makedirs(daily_images_dir, exist_ok=True)
+
+        # Create image filename with timestamp
+        time_str = frame_time.strftime("%H%M%S")
+        image_filename = f"{time_str}_{os.path.splitext(video_filename)[0]}.jpg"
+        image_path = os.path.join(daily_images_dir, image_filename)
+
+        # Save the frame as JPEG
+        cv2.imwrite(image_path, frame)
+        logger.debug(f"Saved periodic image: {image_path}")
+
     def detect_objects_in_frame(self, frame, frame_time, motion_event_id):
         """Detect objects in a single frame using YOLO and store results."""
         return self.object_detector.detect_objects_in_frame(frame, frame_time, motion_event_id)
@@ -203,6 +230,7 @@ class VideoProcessor:
         frame_count = 0
         total_faces = 0
         total_objects = 0
+        last_image_save_time = 0  # Track elapsed time for periodic image saving
 
         # Start tracking session for this video
         if self.object_detector.yolo_model:
@@ -215,6 +243,13 @@ class VideoProcessor:
                     break
 
                 frame_count += 1
+                elapsed_time = frame_count / fps  # Time in seconds since video start
+
+                # Save periodic images every image_save_interval seconds
+                if self.image_save_interval > 0 and elapsed_time - last_image_save_time >= self.image_save_interval:
+                    frame_time = start_time + timedelta(seconds=elapsed_time)
+                    self.save_periodic_image(frame, frame_time, filename)
+                    last_image_save_time = elapsed_time
 
                 # Process every 15th frame to reduce computational load
                 # You can adjust this based on your needs
@@ -252,8 +287,11 @@ class VideoProcessor:
         logger.info(f"  - Objects detected: {total_objects}")
         logger.info(f"  - Faces detected: {total_faces}")
 
-        # Delete video if no detections found (if enabled)
-        if self.delete_empty and total_faces == 0 and total_objects == 0:
+        # Only keep videos that have detections (motion is assumed if video exists)
+        # Delete video if NO detections found (no faces AND no objects)
+        has_detections = (total_faces > 0 or total_objects > 0)
+
+        if self.delete_empty and not has_detections:
             try:
                 if os.path.exists(video_path):
                     os.remove(video_path)
@@ -267,6 +305,10 @@ class VideoProcessor:
 
             except Exception as e:
                 logger.warning(f"  - Could not delete video: {e}")
+        else:
+            # Video kept because it has detections
+            if has_detections:
+                logger.info(f"  - Video saved (has detections)")
 
     def process_all_videos(self, exclude_recent: bool = True):
         """Process all video files in the videos directory.
@@ -392,6 +434,8 @@ def main():
     parser = argparse.ArgumentParser(description='Process video files and store detections in database')
     parser.add_argument('--videos-dir', default='data/videos',
                        help='Directory containing video files (default: data/videos)')
+    parser.add_argument('--images-dir', default='data/images',
+                       help='Directory containing image files (default: data/images)')
     parser.add_argument('--db-path', default='data/db/detections.db',
                        help='Database path (default: data/db/detections.db)')
     parser.add_argument('--no-gpu', action='store_true',
@@ -408,6 +452,8 @@ def main():
                        help='Minimum age in seconds for a file to be considered complete (default: 60)')
     parser.add_argument('--keep-empty', action='store_true',
                        help='Keep videos with no detections (default: delete them)')
+    parser.add_argument('--image-save-interval', type=int, default=300,
+                       help='Save one image every N seconds (default: 300 = 5 minutes, 0 to disable)')
     parser.add_argument('--log-level',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO',
@@ -429,11 +475,13 @@ def main():
     try:
         processor = VideoProcessor(
             videos_dir=args.videos_dir,
+            images_dir=args.images_dir,
             db_path=args.db_path,
             use_gpu=not args.no_gpu,
             skip_processed=not args.reprocess,
             file_age_threshold=args.file_age_threshold,
-            delete_empty=not args.keep_empty
+            delete_empty=not args.keep_empty,
+            image_save_interval=args.image_save_interval
         )
 
         if args.video_file:

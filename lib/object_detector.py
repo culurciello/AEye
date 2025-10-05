@@ -127,6 +127,29 @@ class ObjectDetector:
             self.clip_model = None
             self.clip_preprocess = None
 
+    def expand_bbox(self, bbox_x, bbox_y, bbox_w, bbox_h, frame_w, frame_h, expand_factor=0.25):
+        """Expand bounding box by a percentage on all sides, clipped to frame boundaries.
+
+        Args:
+            bbox_x, bbox_y, bbox_w, bbox_h: Original bounding box
+            frame_w, frame_h: Frame dimensions
+            expand_factor: Percentage to expand (0.25 = 25%)
+
+        Returns:
+            Tuple of (expanded_x, expanded_y, expanded_x2, expanded_y2)
+        """
+        # Calculate expansion amount
+        expand_w = int(bbox_w * expand_factor)
+        expand_h = int(bbox_h * expand_factor)
+
+        # Expand on all sides
+        expanded_x = max(0, bbox_x - expand_w)
+        expanded_y = max(0, bbox_y - expand_h)
+        expanded_x2 = min(frame_w, bbox_x + bbox_w + expand_w)
+        expanded_y2 = min(frame_h, bbox_y + bbox_h + expand_h)
+
+        return expanded_x, expanded_y, expanded_x2, expanded_y2
+
     def generate_crop_embedding(self, crop_image):
         """Generate CLIP embedding for an object crop.
 
@@ -311,15 +334,17 @@ class ObjectDetector:
                         object_crop_bytes = None
                         crop_embedding = None
                         try:
-                            # Ensure coordinates are within frame bounds
+                            # Get frame dimensions
                             frame_h, frame_w = frame.shape[:2]
-                            bbox_x = max(0, min(bbox_x, frame_w - 1))
-                            bbox_y = max(0, min(bbox_y, frame_h - 1))
-                            bbox_x2 = min(bbox_x + bbox_w, frame_w)
-                            bbox_y2 = min(bbox_y + bbox_h, frame_h)
 
-                            # Extract crop
-                            crop = frame[bbox_y:bbox_y2, bbox_x:bbox_x2]
+                            # Use the exact bounding box from the detector
+                            crop_x1 = bbox_x
+                            crop_y1 = bbox_y
+                            crop_x2 = bbox_x + bbox_w
+                            crop_y2 = bbox_y + bbox_h
+
+                            # Extract crop using exact detector bbox
+                            crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
 
                             if crop.size > 0:
                                 # Generate CLIP embedding from original crop before resizing
@@ -412,6 +437,6 @@ class ObjectDetector:
             self.db_manager.store_object_detection(
                 motion_event_id, frame_time, detection['class_name'], detection['confidence'],
                 detection['bbox_x'], detection['bbox_y'], detection['bbox_w'], detection['bbox_h'],
-                detection['crop_bytes'], track_id
+                detection['crop_bytes'], detection['crop_embedding'], track_id
             )
 
