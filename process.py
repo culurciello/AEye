@@ -20,17 +20,16 @@ logger = logging.getLogger(__name__)
 class VideoProcessor:
     """
     Processes video files and saves detections to the database.
+    Analyzes every frame for object and face detection.
     """
 
     def __init__(self,
                  videos_dir: str = "data/videos",
-                 images_dir: str = "data/images",
                  db_path: str = "data/db/detections.db",
                  use_gpu: bool = True,
                  skip_processed: bool = True,
                  file_age_threshold: int = 60,
-                 delete_empty: bool = True,
-                 image_save_interval: int = 600):
+                 video_retention_days: int = 30):
         """
         Initialize the video processor.
 
@@ -40,17 +39,14 @@ class VideoProcessor:
             use_gpu: Whether to use GPU for detection
             skip_processed: Skip videos already marked as processed in database
             file_age_threshold: Minimum age (in seconds) for a file to be considered complete (default: 60)
-            delete_empty: Delete videos with no detections (default: True)
-            image_save_interval: Save one image every N seconds (default: 600 = 10 minutes)
+            video_retention_days: Number of days to retain videos before deletion (default: 30)
         """
         self.videos_dir = videos_dir
         self.db_path = db_path
         self.use_gpu = use_gpu
         self.skip_processed = skip_processed
         self.file_age_threshold = file_age_threshold
-        self.delete_empty = delete_empty
-        self.image_save_interval = image_save_interval
-        self.images_dir = images_dir
+        self.video_retention_days = video_retention_days
 
         # Initialize database manager
         self.db_manager = DatabaseManager(self.db_path)
@@ -143,28 +139,6 @@ class VideoProcessor:
 
         return False
 
-    def save_periodic_image(self, frame, frame_time: datetime, video_filename: str):
-        """Save a frame as an image in the date-organized images directory.
-
-        Args:
-            frame: The video frame to save
-            frame_time: The timestamp of the frame
-            video_filename: The name of the video file being processed
-        """
-        # Create date-based directory structure (YYYY_MM_DD)
-        date_str = frame_time.strftime("%Y_%m_%d")
-        daily_images_dir = os.path.join(self.images_dir, date_str)
-        os.makedirs(daily_images_dir, exist_ok=True)
-
-        # Create image filename with timestamp
-        time_str = frame_time.strftime("%H%M%S")
-        image_filename = f"{time_str}_{os.path.splitext(video_filename)[0]}.jpg"
-        image_path = os.path.join(daily_images_dir, image_filename)
-
-        # Save the frame as JPEG
-        cv2.imwrite(image_path, frame)
-        logger.debug(f"Saved periodic image: {image_path}")
-
     def detect_objects_in_frame(self, frame, frame_time, motion_event_id):
         """Detect objects in a single frame using YOLO and store results."""
         return self.object_detector.detect_objects_in_frame(frame, frame_time, motion_event_id)
@@ -181,7 +155,13 @@ class VideoProcessor:
 
         # Check if already processed
         if self.skip_processed and self.is_video_processed(video_path):
-            logger.info(f"Skipping already processed video: {video_path}")
+            motion_event_data = self.db_manager.get_motion_event_by_video_file(video_path)
+            if motion_event_data:
+                _, event_data = motion_event_data
+                last_processed = event_data.get('last_processed_time', 'unknown')
+                logger.info(f"Skipping already processed video: {video_path} (last processed: {last_processed})")
+            else:
+                logger.info(f"Skipping already processed video: {video_path}")
             return
 
         # Open video file
@@ -198,11 +178,20 @@ class VideoProcessor:
         # Extract timestamp from filename
         filename = os.path.basename(video_path)
         try:
-            # Expected format: YYYYMMDD_HHMMSS.mp4
-            timestamp_str = filename.replace('.mp4', '')
-            start_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-        except ValueError:
-            logger.warning(f"Could not parse timestamp from filename: {filename}, using current time")
+            # Expected format from capture.py: <camera_name>_YYYYMMDD_HHMMSS.mp4
+            # Example: frnt_20241020_143000.mp4
+            filename_no_ext = filename.replace('.mp4', '').replace('.MP4', '')
+            parts = filename_no_ext.split('_')
+
+            # Get the last two parts (date and time)
+            if len(parts) >= 2:
+                timestamp_str = f"{parts[-2]}_{parts[-1]}"
+                start_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+            else:
+                # Fallback: try to parse entire filename
+                start_time = datetime.strptime(filename_no_ext, "%Y%m%d_%H%M%S")
+        except ValueError as e:
+            logger.warning(f"Could not parse timestamp from filename: {filename} ({e}), using current time")
             start_time = datetime.now()
 
         end_time = start_time + timedelta(seconds=duration)
@@ -212,25 +201,23 @@ class VideoProcessor:
             start_time=start_time,
             end_time=end_time,
             file_path=video_path,
-            motion_detected=True,
             processed=False
         )
 
-        # Store motion event in database or get existing one
+        # Store video event in database or get existing one
         motion_event_data = self.db_manager.get_motion_event_by_video_file(video_path)
 
         if motion_event_data:
             motion_event_id, _ = motion_event_data
-            logger.info(f"Using existing motion event ID: {motion_event_id}")
+            logger.info(f"Using existing video event ID: {motion_event_id}")
         else:
             motion_event_id = self.db_manager.store_motion_event(segment)
-            logger.info(f"Created new motion event ID: {motion_event_id}")
+            logger.info(f"Created new video event ID: {motion_event_id}")
 
         # Process video frames
         frame_count = 0
         total_faces = 0
         total_objects = 0
-        last_image_save_time = 0  # Track elapsed time for periodic image saving
 
         # Start tracking session for this video
         if self.object_detector.yolo_model:
@@ -243,29 +230,18 @@ class VideoProcessor:
                     break
 
                 frame_count += 1
-                elapsed_time = frame_count / fps  # Time in seconds since video start
+                frame_time = start_time + timedelta(seconds=frame_count / fps)
 
-                # Save periodic images every image_save_interval seconds
-                if self.image_save_interval > 0 and elapsed_time - last_image_save_time >= self.image_save_interval:
-                    frame_time = start_time + timedelta(seconds=elapsed_time)
-                    self.save_periodic_image(frame, frame_time, filename)
-                    last_image_save_time = elapsed_time
+                # Object detection - returns person bboxes too
+                objects_detected, person_bboxes = self.detect_objects_in_frame(frame, frame_time, motion_event_id)
+                total_objects += objects_detected
 
-                # Process every 15th frame to reduce computational load
-                # You can adjust this based on your needs
-                if frame_count % 15 == 0:
-                    frame_time = start_time + timedelta(seconds=frame_count / fps)
-
-                    # Object detection - returns person bboxes too
-                    objects_detected, person_bboxes = self.detect_objects_in_frame(frame, frame_time, motion_event_id)
-                    total_objects += objects_detected
-
-                    # Person-triggered face detection - only run if persons detected
-                    if person_bboxes and self.face_detector:
-                        faces_detected = self.detect_faces_in_person_crops(frame, person_bboxes, frame_time, motion_event_id)
-                        total_faces += faces_detected
-                        if faces_detected > 0:
-                            logger.debug(f"Detected {faces_detected} faces in {len(person_bboxes)} person crops")
+                # Person-triggered face detection - only run if persons detected
+                if person_bboxes and self.face_detector:
+                    faces_detected = self.detect_faces_in_person_crops(frame, person_bboxes, frame_time, motion_event_id)
+                    total_faces += faces_detected
+                    if faces_detected > 0:
+                        logger.debug(f"Detected {faces_detected} faces in {len(person_bboxes)} person crops")
 
                 # Log progress every 100 frames
                 if frame_count % 100 == 0:
@@ -279,36 +255,14 @@ class VideoProcessor:
             if self.object_detector.yolo_model:
                 self.object_detector.end_tracking_session(motion_event_id)
 
-        # Update motion event with counts
+        # Update video event with detection counts and mark as processed
         self.db_manager.update_motion_event_counts(motion_event_id, total_faces, total_objects)
 
         logger.info(f"Completed: {video_path}")
         logger.info(f"  - Frames processed: {frame_count}")
         logger.info(f"  - Objects detected: {total_objects}")
         logger.info(f"  - Faces detected: {total_faces}")
-
-        # Only keep videos that have detections (motion is assumed if video exists)
-        # Delete video if NO detections found (no faces AND no objects)
-        has_detections = (total_faces > 0 or total_objects > 0)
-
-        if self.delete_empty and not has_detections:
-            try:
-                if os.path.exists(video_path):
-                    os.remove(video_path)
-                    logger.info(f"  - Deleted video (no detections): {os.path.basename(video_path)}")
-
-                    # Also remove from database since file is deleted
-                    with self.db_manager._get_connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute('DELETE FROM motion_events WHERE id = ?', (motion_event_id,))
-                        conn.commit()
-
-            except Exception as e:
-                logger.warning(f"  - Could not delete video: {e}")
-        else:
-            # Video kept because it has detections
-            if has_detections:
-                logger.info(f"  - Video saved (has detections)")
+        logger.info(f"  - Marked as processed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     def process_all_videos(self, exclude_recent: bool = True):
         """Process all video files in the videos directory.
@@ -366,14 +320,74 @@ class VideoProcessor:
 
         logger.info("\nDATABASE STATISTICS")
         logger.info("="*60)
-        logger.info(f"Motion events: {motion_stats['total_motion_events']}")
-        logger.info(f"  - Processed: {motion_stats['processed_events']}")
+        logger.info(f"Videos processed: {motion_stats['total_motion_events']}")
+        logger.info(f"  - Completed: {motion_stats['processed_events']}")
         logger.info(f"  - Total duration: {motion_stats['total_duration_seconds']:.1f}s")
         logger.info(f"Object detections: {object_stats['total_object_detections']}")
         logger.info(f"Face detections: {face_stats['total_face_detections']}")
         logger.info(f"  - Recognized: {face_stats['recognized_faces']}")
         logger.info(f"  - Unknown: {face_stats['unknown_faces']}")
         logger.info("="*60)
+
+    def cleanup_old_videos(self):
+        """Delete videos older than the retention period.
+
+        Returns:
+            Tuple of (deleted_count, total_size_mb) - number of videos deleted and total size freed
+        """
+        if self.video_retention_days <= 0:
+            logger.debug("Video retention is disabled (retention_days <= 0)")
+            return 0, 0
+
+        logger.info(f"Cleaning up videos older than {self.video_retention_days} days...")
+
+        # Calculate cutoff time
+        cutoff_time = time.time() - (self.video_retention_days * 24 * 60 * 60)
+
+        # Get all video files
+        pattern = os.path.join(self.videos_dir, "**", "*.mp4")
+        all_videos = glob.glob(pattern, recursive=True)
+
+        deleted_count = 0
+        total_size = 0
+
+        for video_path in all_videos:
+            try:
+                # Get file modification time
+                file_mtime = os.path.getmtime(video_path)
+
+                # Check if file is older than retention period
+                if file_mtime < cutoff_time:
+                    # Get file size before deleting
+                    file_size = os.path.getsize(video_path)
+
+                    # Delete the video file
+                    os.remove(video_path)
+                    deleted_count += 1
+                    total_size += file_size
+
+                    logger.info(f"  - Deleted old video: {os.path.basename(video_path)} ({file_size / 1024 / 1024:.2f} MB)")
+
+                    # Remove from database
+                    motion_event_data = self.db_manager.get_motion_event_by_video_file(video_path)
+                    if motion_event_data:
+                        motion_event_id, _ = motion_event_data
+                        with self.db_manager._get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute('DELETE FROM motion_events WHERE id = ?', (motion_event_id,))
+                            conn.commit()
+                            logger.debug(f"  - Removed database entry for video_event_id: {motion_event_id}")
+
+            except Exception as e:
+                logger.warning(f"Could not delete video {video_path}: {e}")
+
+        total_size_mb = total_size / 1024 / 1024
+        if deleted_count > 0:
+            logger.info(f"Cleanup complete: Deleted {deleted_count} video(s), freed {total_size_mb:.2f} MB")
+        else:
+            logger.info("Cleanup complete: No old videos to delete")
+
+        return deleted_count, total_size_mb
 
     def monitor_and_process(self, check_interval: int = 30):
         """Continuously monitor for new video files and process them.
@@ -387,9 +401,17 @@ class VideoProcessor:
         logger.info(f"Videos directory: {self.videos_dir}")
         logger.info(f"Check interval: {check_interval} seconds")
         logger.info(f"File age threshold: {self.file_age_threshold} seconds")
+        logger.info(f"Video retention: {self.video_retention_days} days")
+        logger.info(f"Frame processing: Every frame analyzed")
         logger.info(f"Excluding most recent file: Yes (to avoid processing incomplete files)")
         logger.info("Press Ctrl+C to stop monitoring")
         logger.info("="*60 + "\n")
+
+        # Initial cleanup of old videos
+        if self.video_retention_days > 0:
+            logger.info("Running initial cleanup of old videos...")
+            self.cleanup_old_videos()
+            logger.info("")
 
         iteration = 0
 
@@ -421,6 +443,11 @@ class VideoProcessor:
                 if iteration % 10 == 0:
                     self.print_database_stats()
 
+                # Cleanup old videos periodically (every 20 iterations)
+                if self.video_retention_days > 0 and iteration % 20 == 0:
+                    logger.info("\nRunning periodic cleanup of old videos...")
+                    self.cleanup_old_videos()
+
                 # Wait before next check
                 logger.info(f"\nWaiting {check_interval} seconds before next check...")
                 time.sleep(check_interval)
@@ -434,8 +461,6 @@ def main():
     parser = argparse.ArgumentParser(description='Process video files and store detections in database')
     parser.add_argument('--videos-dir', default='data/videos',
                        help='Directory containing video files (default: data/videos)')
-    parser.add_argument('--images-dir', default='data/images',
-                       help='Directory containing image files (default: data/images)')
     parser.add_argument('--db-path', default='data/db/detections.db',
                        help='Database path (default: data/db/detections.db)')
     parser.add_argument('--no-gpu', action='store_true',
@@ -446,14 +471,12 @@ def main():
                        help='Process a single video file instead of all videos')
     parser.add_argument('--monitor', action='store_true',
                        help='Continuously monitor for new video files and process them')
-    parser.add_argument('--check-interval', type=int, default=30,
+    parser.add_argument('--check-interval', type=int, default=3600,
                        help='Time in seconds between checks for new files in monitor mode (default: 30)')
     parser.add_argument('--file-age-threshold', type=int, default=60,
                        help='Minimum age in seconds for a file to be considered complete (default: 60)')
-    parser.add_argument('--keep-empty', action='store_true',
-                       help='Keep videos with no detections (default: delete them)')
-    parser.add_argument('--image-save-interval', type=int, default=300,
-                       help='Save one image every N seconds (default: 300 = 5 minutes, 0 to disable)')
+    parser.add_argument('--video-retention-days', type=int, default=30,
+                       help='Number of days to retain videos before deletion (default: 30, set to 0 to disable)')
     parser.add_argument('--log-level',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO',
@@ -475,13 +498,11 @@ def main():
     try:
         processor = VideoProcessor(
             videos_dir=args.videos_dir,
-            images_dir=args.images_dir,
             db_path=args.db_path,
             use_gpu=not args.no_gpu,
             skip_processed=not args.reprocess,
             file_age_threshold=args.file_age_threshold,
-            delete_empty=not args.keep_empty,
-            image_save_interval=args.image_save_interval
+            video_retention_days=args.video_retention_days
         )
 
         if args.video_file:

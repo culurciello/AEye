@@ -11,12 +11,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VideoSegment:
-    """Represents a video segment with motion data."""
+    """Represents a video segment with detection data."""
     start_time: datetime
     end_time: datetime
     file_path: str
-    motion_detected: bool
     processed: bool = False
+    motion_detected: bool = False
     detection_count: int = 0
 
 class CircularVideoBuffer:

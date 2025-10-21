@@ -6,10 +6,10 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 # If using Homebrew Python, add:
 export PATH="/opt/homebrew/bin:$PATH"
 
-cd /Users/euge/Work/AEye
+cd /Users/euge/Work/AEye-simple
 
 # Run first command in background
-./ingest_ffmpeg rtsp://admin:tokkigeo1@192.168.6.254:554/Preview_01_sub data/videos &
+python3 capture.py &
 
 # Run second command in background
 python3 process.py --monitor &

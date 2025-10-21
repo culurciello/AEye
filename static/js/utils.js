@@ -219,8 +219,13 @@ function createEventCard(event) {
     const startTime = new Date(event.start_time);
     const duration = parseFloat(event.duration_seconds);
 
-    // Build object classes display
-    let objectsDisplay = '';
+    // Debug logging
+    console.log(`Event ${event.id}: object_count=${event.object_count}, detections=${event.object_detections?.length || 0}, tracks=${event.object_tracks?.length || 0}`);
+
+    // Build object categories summary
+    let objectCategoriesDisplay = '';
+    let objectsPreviewDisplay = '';
+
     if (event.object_detections && event.object_detections.length > 0) {
         const objectClasses = {};
         event.object_detections.forEach(od => {
@@ -230,7 +235,22 @@ function createEventCard(event) {
             objectClasses[od.class_name].push(od);
         });
 
-        objectsDisplay = Object.entries(objectClasses).map(([className, detections]) => {
+        // Create category badges summary
+        const categories = Object.keys(objectClasses).sort();
+        objectCategoriesDisplay = `
+            <div class="object-categories-summary">
+                <div class="summary-label">Detected Objects:</div>
+                <div class="category-badges">
+                    ${categories.map(className => {
+                        const count = objectClasses[className].length;
+                        return `<span class="category-badge">${className} (${count})</span>`;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+
+        // Create detailed preview with thumbnails
+        objectsPreviewDisplay = Object.entries(objectClasses).map(([className, detections]) => {
             const firstDetection = detections[0];
             return `
                 <div class="object-class-item">
@@ -242,6 +262,28 @@ function createEventCard(event) {
                 </div>
             `;
         }).join('');
+    } else if (event.object_tracks && event.object_tracks.length > 0) {
+        // If we have tracks but no detections loaded, use tracks data
+        const trackClasses = {};
+        event.object_tracks.forEach(track => {
+            if (!trackClasses[track.class_name]) {
+                trackClasses[track.class_name] = 0;
+            }
+            trackClasses[track.class_name]++;
+        });
+
+        const categories = Object.keys(trackClasses).sort();
+        objectCategoriesDisplay = `
+            <div class="object-categories-summary">
+                <div class="summary-label">Detected Objects:</div>
+                <div class="category-badges">
+                    ${categories.map(className => {
+                        const count = trackClasses[className];
+                        return `<span class="category-badge">${className} (${count})</span>`;
+                    }).join('')}
+                </div>
+            </div>
+        `;
     }
 
     card.innerHTML = `
@@ -250,9 +292,17 @@ function createEventCard(event) {
             <div class="event-duration">${duration.toFixed(1)}s</div>
         </div>
 
-        ${objectsDisplay ? `
+        ${objectCategoriesDisplay}
+
+        ${!objectCategoriesDisplay && event.object_count === 0 ? `
+            <div class="no-objects-message">
+                <span style="color: var(--text-secondary); font-size: 0.85rem;">No objects detected in this event</span>
+            </div>
+        ` : ''}
+
+        ${objectsPreviewDisplay ? `
             <div class="object-detections-preview">
-                ${objectsDisplay}
+                ${objectsPreviewDisplay}
             </div>
         ` : ''}
 
@@ -264,6 +314,10 @@ function createEventCard(event) {
                 }
                 ${event.object_count > 0 ?
                     `<span class="object-badge">${event.object_count} objects</span>` :
+                    ''
+                }
+                ${event.track_count > 0 ?
+                    `<span class="track-badge">${event.track_count} tracks</span>` :
                     ''
                 }
             </div>

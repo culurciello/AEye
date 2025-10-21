@@ -31,6 +31,9 @@ class MotionViewer:
         os.makedirs(self.images_dir, exist_ok=True)
         os.makedirs(self.db_dir, exist_ok=True)
 
+        # Database path (must be set before calling get_available_dates)
+        self.db_path = os.path.join(self.db_dir, "detections.db")
+
         if date:
             self.current_date = date
         else:
@@ -40,9 +43,6 @@ class MotionViewer:
                 self.current_date = available_dates[0]  # Most recent date
             else:
                 self.current_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Database path
-        self.db_path = os.path.join(self.db_dir, "detections.db")
     
     def _get_connection(self):
         """Get database connection."""
@@ -139,10 +139,26 @@ class MotionViewer:
         conn.commit()
 
     def get_available_dates(self) -> List[str]:
-        """Get list of available dates with data (either videos or images)."""
+        """Get list of available dates with data from the database."""
         dates = set()
 
-        # Check video directories
+        # Get dates from motion_events table in the database
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT DATE(start_time) as date
+                    FROM motion_events
+                    WHERE start_time IS NOT NULL
+                    ORDER BY date DESC
+                ''')
+                for row in cursor.fetchall():
+                    if row[0]:
+                        dates.add(row[0])
+        except Exception as e:
+            print(f"Error fetching dates from database: {e}")
+
+        # Also check video directories (for backward compatibility with date-based organization)
         if os.path.exists(self.videos_dir):
             for item in os.listdir(self.videos_dir):
                 if os.path.isdir(os.path.join(self.videos_dir, item)) and item.count('_') == 2:
@@ -154,7 +170,7 @@ class MotionViewer:
                     except ValueError:
                         continue
 
-        # Check image directories
+        # Also check image directories (for backward compatibility with date-based organization)
         if os.path.exists(self.images_dir):
             for item in os.listdir(self.images_dir):
                 if os.path.isdir(os.path.join(self.images_dir, item)) and item.count('_') == 2:

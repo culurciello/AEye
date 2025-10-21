@@ -48,6 +48,7 @@ class DatabaseManager:
                 processed BOOLEAN DEFAULT FALSE,
                 face_count INTEGER DEFAULT 0,
                 object_count INTEGER DEFAULT 0,
+                last_processed_time TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -75,6 +76,11 @@ class DatabaseManager:
         # Add columns to existing motion_events table if they don't exist
         try:
             cursor.execute('ALTER TABLE motion_events ADD COLUMN track_count INTEGER DEFAULT 0')
+        except:
+            pass  # Column already exists
+
+        try:
+            cursor.execute('ALTER TABLE motion_events ADD COLUMN last_processed_time TIMESTAMP')
         except:
             pass  # Column already exists
 
@@ -394,7 +400,7 @@ class DatabaseManager:
 
         cursor.execute('''
             SELECT id, start_time, end_time, video_file, duration_seconds,
-                   processed, face_count, object_count, created_at
+                   processed, face_count, object_count, last_processed_time, created_at
             FROM motion_events
             WHERE video_file = ?
         ''', (video_file,))
@@ -413,7 +419,8 @@ class DatabaseManager:
                 'processed': result[5],
                 'face_count': result[6],
                 'object_count': result[7],
-                'created_at': result[8]
+                'last_processed_time': result[8],
+                'created_at': result[9]
             }
             return motion_event_id, motion_event_data
 
@@ -432,9 +439,9 @@ class DatabaseManager:
 
         cursor.execute('''
             UPDATE motion_events
-            SET processed = ?, face_count = ?, object_count = ?
+            SET processed = ?, face_count = ?, object_count = ?, last_processed_time = ?
             WHERE id = ?
-        ''', (True, face_count, object_count, motion_event_id))
+        ''', (True, face_count, object_count, datetime.now(), motion_event_id))
 
         conn.commit()
         conn.close()
