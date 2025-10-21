@@ -1,6 +1,20 @@
 # AEye Simple
 
-save frames / video at 1 fps from ffmpeg
+![](docs/pics/demo.png)
+
+save frames every few seconds and composes a video every hour 
+
+
+## Installation
+
+`pip install -r requirements.txt`
+
+## Usage
+
+See `run.sh`
+
+
+## Info
 
 Camera driveway:
 rtsp://admin:tokkigeo1@192.168.6.254:554/Preview_01_sub 
